@@ -4,6 +4,7 @@ import re
 import json
 import time
 import torch
+import httpx
 import random
 import base64
 import hashlib
@@ -40,6 +41,7 @@ __all__ = [
     "time",
     "tqdm",
     "torch",
+    "httpx",
     "sleep",
     "random",
     "hashlib",

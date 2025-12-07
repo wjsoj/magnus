@@ -16,7 +16,7 @@ front_end/.vercel
 front_end/*.tsbuildinfo
 
 
-# Back End: Python
+# Back End: Python, FastAPI + SQLAlchemy
 back_end/**/__pycache__/
 back_end/*.py[oc]
 back_end/.venv

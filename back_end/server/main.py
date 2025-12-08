@@ -1,17 +1,15 @@
 # 文件: back_end/server/main.py
-import uvicorn
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from server.routers import router
-from library.fundamental.github_tools import github
+from library import *
+from .routers import *
+from ._github_client import *
+from ._magnus_config import *
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 启动时不做啥
     yield
     # 关闭时清理 HTTP Client
-    await github.close()
+    await github_client.close()
 
 app = FastAPI(title="Magnus API", lifespan=lifespan)
 
@@ -27,4 +25,9 @@ app.include_router(router, prefix="/api")
 
 if __name__ == "__main__":
     # 监听 0.0.0.0 方便你在本地浏览器访问远程服务器
-    uvicorn.run("server.main:app", host="0.0.0.0", port=8017, reload=True)
+    uvicorn.run(
+        "server.main:app", 
+        host = "0.0.0.0", 
+        port = magnus_config["server"]["port"],
+        reload = True,
+    )

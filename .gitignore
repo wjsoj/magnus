@@ -1,3 +1,7 @@
+# Global Configs
+configs/
+
+
 # Front End: Next.js
 front_end/node_modules
 front_end/.pnp
@@ -24,7 +28,6 @@ back_end/run*.py
 back_end/run*.sh
 back_end/!scripts/**
 back_end/scripts/**/**__pycache__**
-back_end/configs/
 
 
 # Others

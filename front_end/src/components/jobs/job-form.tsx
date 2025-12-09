@@ -336,7 +336,7 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
         {errorMessage ? (
              <span className="text-red-500 text-xs font-bold animate-pulse text-center sm:text-left">{errorMessage}</span>
         ) : (
-            <span className="text-zinc-500 text-xs text-center sm:text-left hidden sm:block">Ready to launch</span>
+            <span className="text-zinc-500 text-xs text-center sm:text-left hidden sm:block">Waiting for launch</span>
         )}
         
         <div className="flex gap-3 w-full sm:w-auto">

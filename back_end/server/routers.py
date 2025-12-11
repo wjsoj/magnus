@@ -1,7 +1,7 @@
-# back_end/server/routers.py
 import jwt
 from fastapi import status
 from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import or_ # ✅ 新增 SQL 逻辑操作符
 from library import *
 from . import database
 from . import models
@@ -99,19 +99,42 @@ async def submit_job(
 
 @router.get(
     "/jobs", 
-    response_model = List[JobResponse],
+    response_model = PagedJobResponse, # ✅ 返回类型变更为分页结构
 )
 async def get_jobs(
     skip: int = 0, 
     limit: int = 100, 
+    search: Optional[str] = None, # ✅ 新增搜索参数
+    creator_id: Optional[str] = None, # ✅ 新增用户筛选参数
     db: Session = Depends(database.get_db),
 ):
     """
-    出于对课题组内成员的充分信任，任何成员均可查看所有任务，无需管理员权限
+    支持分页、关键词搜索和用户筛选的任务列表接口
     """
-    jobs = db.query(models.Job).order_by(models.Job.created_at.desc())\
+    query = db.query(models.Job)
+
+    # 1. 搜索逻辑 (支持搜 ID 或 任务名)
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(
+            or_(
+                models.Job.task_name.ilike(search_pattern),
+                models.Job.id.ilike(search_pattern)
+            )
+        )
+    
+    # 2. 用户筛选逻辑
+    if creator_id and creator_id != "all":
+        query = query.filter(models.Job.user_id == creator_id)
+
+    # 3. 计算总数 (用于前端分页)
+    total = query.count()
+
+    # 4. 分页查询
+    jobs = query.order_by(models.Job.created_at.desc())\
             .offset(skip).limit(limit).all()
-    return jobs
+            
+    return {"total": total, "items": jobs}
         
         
 @router.post(
@@ -157,3 +180,17 @@ async def feishu_login(
         "token_type": "bearer",
         "user": db_user,
     }
+    
+    
+@router.get(
+    "/users",
+    response_model=List[UserInfo],
+)
+async def get_users(
+    db: Session = Depends(database.get_db),
+):
+    """
+    获取所有注册用户列表，用于前端筛选器
+    """
+    users = db.query(models.User).order_by(models.User.name).all()
+    return users

@@ -180,12 +180,9 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
     };
     
     try {
-      // ✅ 使用 client 提交，自动带上 Token
       await client("/api/jobs/submit", {
         json: payload 
       });
-      
-      // 成功回调
       onSuccess(); 
     } catch (e: any) {
       console.error(e);

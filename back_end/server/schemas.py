@@ -1,10 +1,10 @@
-# back_end/server/schemas.py
 from library import *
 
 
 __all__ = [
     "JobSubmission",
     "JobResponse",
+    "PagedJobResponse", # ✅ 新增导出
     "FeishuLoginRequest",
     "UserInfo",
     "LoginResponse",
@@ -39,12 +39,17 @@ class JobResponse(JobSubmission):
     status: str
     created_at: datetime
 
-    # 2. ✅ 新增 user 字段，嵌套返回用户详细信息
     # Pydantic 会自动从数据库模型的 relationship 中读取 user 对象
     user: Optional[UserInfo] = None 
 
     class Config:
         from_attributes = True
+
+
+# ✅ 新增：分页响应包装器
+class PagedJobResponse(BaseModel):
+    total: int
+    items: List[JobResponse]
 
 
 class FeishuLoginRequest(BaseModel):

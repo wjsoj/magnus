@@ -1,18 +1,21 @@
 // front_end/src/app/(main)/jobs/page.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Plus, Search, RefreshCw, Box, Rocket, Loader2, User as UserIcon } from "lucide-react";
 import JobForm, { JobFormData } from "@/components/jobs/job-form";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { CopyableText } from "@/components/ui/copyable-text"; // ✅ 复用通用组件
+import { CopyableText } from "@/components/ui/copyable-text";
+import { PaginationControls } from "@/components/ui/pagination-controls";
 import { client } from "@/lib/api";
+import { useAuth } from "@/context/auth-context";
 
 // --- Types ---
 interface User {
   id: string;
   name: string;
   avatar_url?: string;
+  email?: string; // ✅ 新增：用于筛选器显示邮箱
 }
 
 interface Job {
@@ -32,7 +35,7 @@ interface Job {
 }
 
 // --- Components ---
-function UserAvatar({ user }: { user?: User }) {
+function UserAvatar({ user, subText }: { user?: User, subText?: React.ReactNode }) {
   if (!user) {
     return (
       <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700">
@@ -42,58 +45,127 @@ function UserAvatar({ user }: { user?: User }) {
   }
 
   return (
-    <div className="flex items-center gap-2.5">
+    <div className="flex items-center gap-3">
       {user.avatar_url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img 
           src={user.avatar_url} 
           alt={user.name} 
-          className="w-8 h-8 rounded-full border border-zinc-700/50 object-cover shadow-sm"
+          className="w-8 h-8 rounded-full border border-zinc-700/50 object-cover shadow-sm flex-shrink-0"
         />
       ) : (
-        <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-500/30">
+        <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-500/30 flex-shrink-0">
           {user.name.substring(0, 2).toUpperCase()}
         </div>
       )}
-      <div className="flex flex-col">
-        <span className="text-sm font-medium text-zinc-200 leading-tight">{user.name}</span>
+      
+      <div className="flex flex-col gap-0.5">
+        <span className="text-sm font-medium text-zinc-200 leading-none">{user.name}</span>
+        {subText && (
+           <span className="text-xs text-zinc-500 font-mono tracking-tight leading-none">{subText}</span>
+        )}
       </div>
     </div>
   );
 }
 
-const USER_FILTER_OPTIONS = [
-  { label: "All Users", value: "all" },
-  { label: "My Jobs Only", value: "mine" },
-];
-
 export default function JobsPage() {
+  const { user: currentUser } = useAuth();
+
+  // --- UI States ---
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"create" | "clone">("create");
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-  
-  const [userFilter, setUserFilter] = useState("all");
   const [cloneData, setCloneData] = useState<JobFormData | null>(null);
 
+  // --- Data States ---
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]); // ✅ 新增：用户列表
   const [loading, setLoading] = useState(true);
+  
+  // --- Filter & Pagination States ---
+  const [searchQuery, setSearchQuery] = useState(""); 
+  const [debouncedQuery, setDebouncedQuery] = useState(""); 
+  const [selectedUserId, setSelectedUserId] = useState(""); // ✅ 替换旧的 userFilter
+  
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalItems, setTotalItems] = useState(0);
 
-  const fetchJobs = async () => {
+  const skip = (currentPage - 1) * pageSize;
+
+  // --- 1. Fetch Users List ---
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const users = await client("/api/users");
+        setAllUsers(users);
+      } catch (e) {
+        console.error("Failed to load users list", e);
+      }
+    };
+    fetchUsers();
+  }, []);
+
+  // --- 2. Build Filter Options ---
+  const userFilterOptions = useMemo(() => {
+    return [
+      { label: "All Users", value: "" },
+      ...allUsers.map(u => ({
+        label: u.name,
+        value: u.id,
+        meta: u.email || "No Email"
+      }))
+    ];
+  }, [allUsers]);
+
+  // --- 3. Fetch Jobs ---
+  const fetchJobs = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await client("/api/jobs");
-      setJobs(data);
+      const params = new URLSearchParams({
+        skip: skip.toString(),
+        limit: pageSize.toString(),
+      });
+
+      if (debouncedQuery.trim()) {
+        params.append("search", debouncedQuery.trim());
+      }
+
+      // ✅ 传 creator_id 给后端
+      if (selectedUserId) {
+        params.append("creator_id", selectedUserId);
+      }
+
+      const data = await client(`/api/jobs?${params.toString()}`);
+      setJobs(data.items);
+      setTotalItems(data.total);
+
     } catch (e) {
       console.error("Backend offline?", e);
     } finally {
       setLoading(false);
     }
-  };
+  }, [skip, pageSize, debouncedQuery, selectedUserId]);
+
+  // --- Effects ---
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedQuery, selectedUserId]);
 
   useEffect(() => {
     fetchJobs();
-  }, []);
+  }, [fetchJobs]); 
 
+
+  // --- Event Handlers ---
   const handleNewJob = () => {
     setDrawerMode("create");
     setCloneData(null); 
@@ -118,7 +190,6 @@ export default function JobsPage() {
     setIsDrawerOpen(true);
   };
 
-  // ! PROTECTED: Must use absolute Beijing Time. Do NOT change.
   const formatBeijingTime = (isoString: string) => {
     if (!isoString) return "--";
     const date = new Date(isoString.endsWith("Z") ? isoString : `${isoString}Z`);
@@ -134,7 +205,7 @@ export default function JobsPage() {
   };
 
   return (
-    <div className="relative min-h-[calc(100vh-8rem)]">
+    <div className="relative min-h-[calc(100vh-8rem)] pb-20"> 
       
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
@@ -152,141 +223,159 @@ export default function JobsPage() {
         </button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-1.5 mb-6 flex items-center gap-2 backdrop-blur-sm">
+      {/* Filters & Search */}
+      {/* ✅ 修复：relative z-20 确保下拉菜单浮在表格上方 */}
+      <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-1.5 mb-6 flex items-center gap-2 backdrop-blur-sm relative z-20">
         <div className="relative flex-1 group">
            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-blue-500 transition-colors" />
            <input 
              type="text" 
-             placeholder="Search tasks..." 
+             value={searchQuery}
+             onChange={(e) => setSearchQuery(e.target.value)}
+             placeholder="Search by Task Name or ID..." 
              className="w-full bg-transparent border-none py-2.5 pl-9 pr-4 text-sm text-zinc-200 focus:outline-none focus:ring-0 placeholder-zinc-600"
            />
         </div>
         <div className="h-6 w-px bg-zinc-800"></div>
-        <div className="w-48"> 
+        
+        {/* ✅ Dynamic User Filter */}
+        <div className="w-56"> 
           <SearchableSelect
-             value={userFilter}
-             onChange={setUserFilter}
-             options={USER_FILTER_OPTIONS}
-             placeholder="All Users"
+             value={selectedUserId}
+             onChange={setSelectedUserId}
+             options={userFilterOptions}
+             placeholder="Filter by User"
              className="mb-0 border-none bg-transparent" 
           />
         </div>
       </div>
 
-      {/* Table */}
-      <div className="border border-zinc-800 rounded-xl overflow-hidden bg-zinc-900/30 min-h-[400px] shadow-sm">
+      {/* Table & Pagination Container */}
+      {/* ✅ 修复：relative z-10 确保层级正确 */}
+      <div className="border border-zinc-800 rounded-xl bg-zinc-900/30 min-h-[400px] shadow-sm flex flex-col relative z-10">
         {loading ? (
-           <div className="flex flex-col items-center justify-center h-80 text-zinc-500 gap-3">
+           <div className="flex flex-col items-center justify-center flex-1 h-80 text-zinc-500 gap-3">
              <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-             <p className="text-sm font-medium">Loading jobs...</p>
+             <p className="text-sm font-medium">Fetching jobs...</p>
            </div>
         ) : jobs.length === 0 ? (
-           <div className="flex flex-col items-center justify-center h-80 text-zinc-500">
+           <div className="flex flex-col items-center justify-center flex-1 h-80 text-zinc-500">
              <div className="w-16 h-16 bg-zinc-800/50 rounded-full flex items-center justify-center mb-4">
                 <Box className="w-8 h-8 opacity-40" />
              </div>
              <p className="text-lg font-medium text-zinc-400">No jobs found</p>
-             <p className="text-sm mt-1">Get started by creating a new training task.</p>
+             <p className="text-sm mt-1">Try adjusting your filters or create a new task.</p>
            </div>
         ) : (
-          <table className="w-full text-left text-sm">
-            <thead className="bg-zinc-900/90 text-zinc-500 border-b border-zinc-800 backdrop-blur-md">
-              <tr>
-                <th className="px-6 py-4 font-medium w-[28%]">Task Details</th>
-                <th className="px-6 py-4 font-medium w-[12%]">Status</th>
-                <th className="px-6 py-4 font-medium w-[25%]">Code Source</th>
-                <th className="px-6 py-4 font-medium w-[15%]">Resources</th>
-                <th className="px-6 py-4 font-medium w-[20%]">Creator</th>
-                <th className="px-6 py-4 font-medium text-right"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800/50">
-              {jobs.map((job) => (
-                <tr key={job.id} className="hover:bg-zinc-800/40 transition-colors group">
-                  
-                  {/* Task Details */}
-                  <td className="px-6 py-4 align-top">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="font-semibold text-zinc-200 text-base">{job.task_name}</span>
-                      <div className="flex items-center gap-2">
-                        {/* ✅ 复用组件: Display full ID, customized with tailwind classes */}
-                        <CopyableText 
-                            text={job.id} 
-                            className="text-[10px] uppercase tracking-wider" 
-                        />
-                      </div>
-                      {job.description && (
-                        <p className="text-zinc-500 text-xs line-clamp-1 mt-0.5">{job.description}</p>
-                      )}
-                    </div>
-                  </td>
-
-                  {/* Status */}
-                  <td className="px-6 py-4 align-top">
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border shadow-sm
-                      ${job.status === 'Running' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 
-                        job.status === 'Failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 
-                        job.status === 'Pending' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' :
-                        'bg-green-500/10 text-green-400 border-green-500/20'}`}>
-                      {job.status === 'Running' && <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500"></span></span>}
-                      {job.status}
-                    </span>
-                  </td>
-
-                  {/* Code Source */}
-                  <td className="px-6 py-4 align-top">
-                      <div className="flex flex-col gap-1.5">
-                          <span className="text-zinc-300 flex items-center gap-2 text-xs font-medium bg-zinc-900/50 w-fit px-2 py-1 rounded border border-zinc-800">
-                            <Box className="w-3.5 h-3.5 text-zinc-500"/> 
-                            {job.namespace} / {job.repo_name}
-                          </span>
-                          <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono ml-1">
-                             <div className="w-1.5 h-1.5 rounded-full bg-zinc-600"></div>
-                             {job.branch}
-                             <span className="text-zinc-700">|</span>
-                             <span className="bg-zinc-800 px-1.5 rounded text-zinc-400">{job.commit_sha.substring(0, 7)}</span>
+          <>
+            <div className="overflow-x-auto first:rounded-t-xl w-full">
+              <table className="w-full text-left text-sm whitespace-nowrap table-fixed">
+                <thead className="bg-zinc-900/90 text-zinc-500 border-b border-zinc-800 backdrop-blur-md">
+                  <tr>
+                    <th className="px-6 py-4 font-medium w-[25%]">Task / Task ID</th>
+                    <th className="px-6 py-4 font-medium w-[10%]">Status</th>
+                    <th className="px-6 py-4 font-medium w-[20%]">Github Repo / Branch · Commit </th>
+                    <th className="px-6 py-4 font-medium w-[15%]">Resources</th>
+                    <th className="px-6 py-4 font-medium w-[20%]">Creator / Created at</th>
+                    <th className="px-6 py-4 font-medium text-right w-[10%]"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/50">
+                  {jobs.map((job) => (
+                    <tr key={job.id} className="hover:bg-zinc-800/40 transition-colors group">
+                      
+                      {/* Task / Task ID */}
+                      <td className="px-6 py-4 align-top whitespace-normal break-all">
+                        <div className="flex flex-col gap-1.5">
+                          <span className="font-semibold text-zinc-200 text-base">{job.task_name}</span>
+                          <div className="flex items-center gap-2">
+                            <CopyableText text={job.id} className="text-[10px] uppercase tracking-wider" />
                           </div>
-                      </div>
-                  </td>
+                          {job.description && (
+                            <p className="text-zinc-500 text-xs line-clamp-1 mt-0.5">{job.description}</p>
+                          )}
+                        </div>
+                      </td>
 
-                  {/* Resources */}
-                  {/* ! PROTECTED: Single line format "Type × Count", do not change. */}
-                  <td className="px-6 py-4 align-top">
-                      <span className="text-zinc-300 text-sm font-medium">
-                          {job.gpu_type === 'CPU' 
-                              ? 'CPU Only' 
-                              : `${job.gpu_type.replace(/_/g, ' ')} × ${job.gpu_count}`
-                          }
-                      </span>
-                  </td>
-
-                  {/* Creator */}
-                  <td className="px-6 py-4 align-top">
-                    <div className="flex flex-col gap-2">
-                        <UserAvatar user={job.user} />
-                        <span className="text-xs text-zinc-500 pl-11 font-mono tracking-tight">
-                           {formatBeijingTime(job.created_at)}
+                      {/* Status */}
+                      <td className="px-6 py-4 align-top">
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border shadow-sm
+                          ${job.status === 'Running' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 
+                            job.status === 'Failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 
+                            job.status === 'Pending' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' :
+                            'bg-green-500/10 text-green-400 border-green-500/20'}`}>
+                          {job.status === 'Running' && <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500"></span></span>}
+                          {job.status}
                         </span>
-                    </div>
-                  </td>
+                      </td>
 
-                  {/* Actions */}
-                  <td className="px-6 py-4 align-middle text-right">
-                    <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
-                      <button 
-                          onClick={() => handleCloneJob(job)} 
-                          className="p-2 bg-zinc-800 hover:bg-zinc-700 hover:text-white rounded-lg text-zinc-400 transition-colors border border-zinc-700/50 shadow-sm" 
-                          title="Clone & Rerun"
-                      >
-                        <RefreshCw className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {/* Github Repo / Branch · Commit */}
+                      <td className="px-6 py-4 align-top">
+                          <div className="flex flex-col gap-1.5">
+                              <span className="text-zinc-300 flex items-center gap-2 text-xs font-medium bg-zinc-900/50 w-fit px-2 py-1 rounded border border-zinc-800">
+                                <Box className="w-3.5 h-3.5 text-zinc-500"/> 
+                                {job.namespace} / {job.repo_name}
+                              </span>
+                              <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono ml-1">
+                                <div className="w-1.5 h-1.5 rounded-full bg-zinc-600"></div>
+                                {job.branch}
+                                <span className="text-zinc-700">|</span>
+                                <span className="bg-zinc-800 px-1.5 rounded text-zinc-400">{job.commit_sha.substring(0, 7)}</span>
+                              </div>
+                          </div>
+                      </td>
+
+                      {/* Resources */}
+                      <td className="px-6 py-4 align-top">
+                          <span className="text-zinc-300 text-sm font-medium">
+                              {job.gpu_type === 'CPU' 
+                                  ? 'CPU Only' 
+                                  : `${job.gpu_type.replace(/_/g, ' ')} × ${job.gpu_count}`
+                              }
+                          </span>
+                      </td>
+
+                      {/* Creator / Created at */}
+                      <td className="px-6 py-4 align-top">
+                        <UserAvatar 
+                          user={job.user} 
+                          subText={formatBeijingTime(job.created_at)} 
+                        />
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-6 py-4 align-middle text-right">
+                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
+                          <button 
+                              onClick={() => handleCloneJob(job)} 
+                              className="p-2 bg-zinc-800 hover:bg-zinc-700 hover:text-white rounded-lg text-zinc-400 transition-colors border border-zinc-700/50 shadow-sm" 
+                              title="Clone & Rerun"
+                          >
+                            <RefreshCw className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination Footer */}
+            <div className="px-6 bg-zinc-900/30 border-t border-zinc-800 last:rounded-b-xl">
+              <PaginationControls 
+                currentPage={currentPage}
+                totalPages={Math.ceil(totalItems / pageSize)}
+                pageSize={pageSize}
+                totalItems={totalItems}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={(newSize) => {
+                   setPageSize(newSize);
+                   setCurrentPage(1);
+                }}
+              />
+            </div>
+          </>
         )}
       </div>
 
@@ -300,7 +389,6 @@ export default function JobsPage() {
 
       <div className={`fixed top-0 right-0 h-full w-[600px] bg-[#09090b] border-l border-zinc-800 shadow-2xl z-[100] transform transition-transform duration-300 ease-in-out ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="h-full flex flex-col relative">
-          
           <div className="px-6 py-5 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50 backdrop-blur-sm">
             <div>
                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
@@ -311,7 +399,6 @@ export default function JobsPage() {
             </div>
             <button onClick={() => setIsDrawerOpen(false)} className="text-zinc-500 hover:text-white transition-colors bg-zinc-800/50 hover:bg-zinc-700 p-1.5 rounded-md">✕</button>
           </div>
-
           <div className="flex-1 overflow-y-auto p-6 custom-scrollbar relative">
             <JobForm 
                 key={drawerMode + (selectedJobId || "")} 
@@ -324,10 +411,8 @@ export default function JobsPage() {
                 }}
             />
           </div>
-          
         </div>
       </div>
-
     </div>
   );
 }

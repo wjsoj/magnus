@@ -7,7 +7,7 @@ function requireEnv(value: string | undefined, key: string): string {
   return value;
 }
 
-const API_PORT = process.env.NEXT_PUBLIC_SERVER_PORT;
+const API_PORT = process.env.NEXT_PUBLIC_BACK_END_PORT;
 export const API_BASE = `http://127.0.0.1:${API_PORT}`;
 export const FEISHU_APP_ID = requireEnv(
     process.env.NEXT_PUBLIC_FEISHU_APP_ID, 

@@ -10,30 +10,10 @@ import { client } from "@/lib/api";
 import { useAuth } from "@/context/auth-context";
 import { POLL_INTERVAL } from "@/lib/config";
 import { useRouter } from "next/navigation";
-
-interface User {
-  id: string;
-  name: string;
-  avatar_url?: string;
-  email?: string;
-}
-
-interface Job {
-  id: string; 
-  task_name: string;
-  description?: string;
-  user?: User;
-  status: string;
-  namespace: string;
-  repo_name: string;
-  branch: string;
-  commit_sha: string;
-  gpu_count: number;
-  gpu_type: string;
-  entry_command: string;
-  job_type: string; 
-  created_at: string;
-}
+import { Job, User } from "@/types/job";
+import { formatBeijingTime } from "@/lib/utils";
+import { JobPriorityBadge } from "@/components/jobs/job-priority-badge";
+import { JobStatusBadge } from "@/components/jobs/job-status-badge";
 
 function UserAvatar({ user, subText }: { user?: User, subText?: React.ReactNode }) {
   if (!user) {
@@ -66,19 +46,6 @@ function UserAvatar({ user, subText }: { user?: User, subText?: React.ReactNode 
         )}
       </div>
     </div>
-  );
-}
-
-function JobPriorityBadge({ type }: { type: string }) {
-  const isNoble = type && type.startsWith('A');
-  return (
-    <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-mono font-bold tracking-tight border shadow-sm select-none
-      ${isNoble 
-        ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' 
-        : 'bg-zinc-800/80 text-zinc-400 border-zinc-700/50'
-      }`}>
-      {type || 'A2'}
-    </span>
   );
 }
 
@@ -206,20 +173,6 @@ export default function JobsPage() {
     setIsDrawerOpen(true);
   };
 
-  const formatBeijingTime = (isoString: string) => {
-    if (!isoString) return "--";
-    const date = new Date(isoString.endsWith("Z") ? isoString : `${isoString}Z`);
-    return date.toLocaleString('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).replace(/\//g, '-'); 
-  };
-
   return (
     <div className="relative min-h-[calc(100vh-8rem)] pb-20"> 
       
@@ -329,15 +282,7 @@ export default function JobsPage() {
 
                       {/* Status */}
                       <td className="px-6 py-4 align-top text-center">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border shadow-sm
-                          ${job.status === 'Running' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 
-                            job.status === 'Failed' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 
-                            job.status === 'Paused' ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' : 
-                            job.status === 'Pending' ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20' :
-                            'bg-green-500/10 text-green-400 border-green-500/20'}`}>
-                          {job.status === 'Running' && <span className="relative flex h-1.5 w-1.5"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500"></span></span>}
-                          {job.status}
-                        </span>
+                        <JobStatusBadge status={job.status} />
                       </td>
 
                       {/* Github */}
@@ -366,8 +311,8 @@ export default function JobsPage() {
                       {/* Resources */}
                       <td className="px-6 py-4 align-top text-center">
                           <span className="text-zinc-300 text-sm font-medium">
-                              {job.gpu_type === 'CPU' 
-                                  ? 'CPU Only' 
+                              {job.gpu_type === 'cpu' 
+                                  ? 'cpu only'
                                   : `${job.gpu_type.replace(/_/g, ' ')} × ${job.gpu_count}`
                               }
                           </span>

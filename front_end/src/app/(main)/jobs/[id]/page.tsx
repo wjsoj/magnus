@@ -3,73 +3,14 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Terminal, Clock, GitBranch, Cpu, Play, AlertCircle, CheckCircle2, PauseCircle, Box, Copy, Check } from "lucide-react";
+import { ArrowLeft, Terminal, Clock, GitBranch, Cpu, Box } from "lucide-react";
 import { client } from "@/lib/api";
 import { CopyableText } from "@/components/ui/copyable-text";
 import { POLL_INTERVAL } from "@/lib/config";
-
-// --- Types (保持与列表页一致) ---
-interface Job {
-  id: string;
-  task_name: string;
-  description?: string;
-  status: string;
-  namespace: string;
-  repo_name: string;
-  branch: string;
-  commit_sha: string;
-  gpu_count: number;
-  gpu_type: string;
-  entry_command: string;
-  job_type: string;
-  created_at: string;
-  slurm_job_id?: string;
-}
-
-// 复用 Badge 组件
-function JobPriorityBadge({ type }: { type: string }) {
-  const isNoble = type && type.startsWith('A');
-  return (
-    <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-mono font-bold tracking-tight border shadow-sm select-none
-      ${isNoble 
-        ? 'bg-purple-500/10 text-purple-400 border-purple-500/30' 
-        : 'bg-zinc-800/80 text-zinc-400 border-zinc-700/50'
-      }`}>
-      {type || 'A2'}
-    </span>
-  );
-}
-
-// 状态图标映射
-const StatusIcon = ({ status }: { status: string }) => {
-  switch (status) {
-    case "Running": return <Play className="w-5 h-5 text-blue-500 animate-pulse" />;
-    case "Success": return <CheckCircle2 className="w-5 h-5 text-green-500" />;
-    case "Failed": return <AlertCircle className="w-5 h-5 text-red-500" />;
-    case "Paused": return <PauseCircle className="w-5 h-5 text-orange-500" />;
-    default: return <Clock className="w-5 h-5 text-yellow-500" />;
-  }
-};
-
-// 专门为标题设计的复制组件
-function TitleCopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <button 
-      onClick={handleCopy}
-      className="ml-3 p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-md transition-all opacity-0 group-hover:opacity-100"
-      title="Copy Task Name"
-    >
-      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-    </button>
-  );
-}
+import { Job } from "@/types/job";
+import { formatBeijingTime } from "@/lib/utils";
+import { JobPriorityBadge } from "@/components/jobs/job-priority-badge";
+import { JobStatusBadge } from "@/components/jobs/job-status-badge";
 
 export default function JobDetailsPage() {
   const params = useParams();
@@ -81,19 +22,23 @@ export default function JobDetailsPage() {
   const [loading, setLoading] = useState(true);
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  // 1. 获取任务详情
+  // 1. 获取任务详情 (支持轮询)
   useEffect(() => {
-    const fetchJob = async () => {
+    const fetchJob = async (isBackground = false) => {
+      if (!isBackground) setLoading(true);
       try {
         const data = await client(`/api/jobs/${jobId}`);
         setJob(data);
       } catch (e) {
         console.error("Failed to fetch job", e);
       } finally {
-        setLoading(false);
+        if (!isBackground) setLoading(false);
       }
     };
+
     fetchJob();
+    const interval = setInterval(() => fetchJob(true), POLL_INTERVAL);
+    return () => clearInterval(interval);
   }, [jobId]);
 
   // 2. 轮询日志
@@ -112,13 +57,6 @@ export default function JobDetailsPage() {
     const interval = setInterval(fetchLogs, POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [jobId]);
-
-  // 自动滚动
-  useEffect(() => {
-    if (logEndRef.current && job?.status === 'Running') {
-      logEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [logs, job?.status]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-[50vh] text-zinc-500">Loading Job Context...</div>;
@@ -152,33 +90,37 @@ export default function JobDetailsPage() {
             
             {/* 任务名 & 优先级 */}
             <div className="flex items-center gap-4 mb-3 group">
-              <h1 className="text-3xl font-bold text-white tracking-tight break-all leading-tight">
-                {job.task_name}
-              </h1>
-              <div className="flex items-center flex-shrink-0">
+              <CopyableText 
+                text={job.task_name} 
+                variant="text"
+                // !w-auto 覆盖默认的 w-full，确保 Badge 能紧跟在后面
+                // 继承原有的 H1 样式，并保留 CopyableText 的 hover:text-blue-400 交互效果
+                className="!w-auto text-3xl font-bold text-white tracking-tight leading-tight"
+              />
+              <div className="flex-shrink-0">
                   <JobPriorityBadge type={job.job_type} />
-                  {/* 新增：任务名复制按钮 */}
-                  <TitleCopyButton text={job.task_name} />
+                  {/* TitleCopyButton 已移除，功能集成在左侧标题中 */}
               </div>
             </div>
             
             {/* ID & 时间 */}
-            <div className="flex items-center gap-4 text-sm text-zinc-500 font-mono">
+            <div className="flex items-center gap-1 text-sm text-zinc-500 font-mono">
               <div className="flex items-center gap-2">
-                 <span className="text-zinc-600">ID:</span>
-                 <CopyableText text={job.id} variant="id" />
+                  <span className="text-zinc-600">ID:</span>
+                  <CopyableText text={job.id} variant="id" />
               </div>
               <span className="text-zinc-700">|</span>
               <span className="flex items-center gap-1.5">
                 <Clock className="w-3.5 h-3.5" />
-                {new Date(job.created_at).toLocaleString()}
+                {formatBeijingTime(job.created_at)}
               </span>
             </div>
+          
           </div>
           
           {/* 状态大卡片 - 保持靠右 */}
           <div className="flex items-center gap-4 bg-zinc-900/50 border border-zinc-800 px-6 py-4 rounded-xl backdrop-blur-sm flex-shrink-0 shadow-lg shadow-black/20">
-            <StatusIcon status={job.status} />
+            <JobStatusBadge status={job.status} size="md" />
             <div className="flex flex-col">
               <span className="text-xs text-zinc-500 uppercase font-bold tracking-wider mb-0.5">Status</span>
               <span className={`text-base font-bold tracking-wide
@@ -191,7 +133,7 @@ export default function JobDetailsPage() {
             {job.slurm_job_id && (
                <div className="ml-4 pl-6 border-l border-zinc-700/50 flex flex-col">
                   <span className="text-xs text-zinc-500 uppercase font-bold tracking-wider mb-0.5">Slurm ID</span>
-                  <span className="text-base font-mono text-zinc-200">#{job.slurm_job_id}</span>
+                  <span className="text-base font-mono text-zinc-200">{job.slurm_job_id}</span>
                </div>
             )}
           </div>
@@ -213,7 +155,6 @@ export default function JobDetailsPage() {
               
               {/* Repo Name */}
               <div>
-                {/* 🟢 修改点：标题作为跳转入口 */}
                 <div className="flex items-center gap-2 mb-2">
                     <a 
                         href={`https://github.com/${job.namespace}/${job.repo_name}`} 
@@ -227,13 +168,13 @@ export default function JobDetailsPage() {
                     </a>
                 </div>
                 
-                {/* 值作为复制区域 (保持干净，只负责显示和复制) */}
                 <div className="flex items-center gap-2 text-sm text-zinc-200 bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800/50 shadow-inner">
                   <Box className="w-4 h-4 text-zinc-500 flex-shrink-0" />
-                  <span className="truncate flex-1">{job.namespace} / {job.repo_name}</span>
-                  <div className="border-l border-zinc-800 pl-2 ml-1">
-                      <CopyableText text={`${job.namespace}/${job.repo_name}`} variant="id" />
-                  </div>
+                  <CopyableText 
+                    text={`${job.namespace}/${job.repo_name}`} 
+                    variant="text" 
+                    className="text-zinc-200 font-mono"
+                  />
                 </div>
               </div>
               
@@ -241,7 +182,6 @@ export default function JobDetailsPage() {
                   
                   {/* Branch */}
                   <div>
-                    {/* 🟢 修改点：标题作为跳转入口 */}
                     <div className="flex items-center gap-2 mb-1.5">
                         <a 
                             href={`https://github.com/${job.namespace}/${job.repo_name}/tree/${job.branch}`}
@@ -254,15 +194,17 @@ export default function JobDetailsPage() {
                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                         </a>
                     </div>
-                    <div className="text-sm font-mono text-zinc-300 bg-zinc-950/50 px-2 py-1.5 rounded border border-zinc-800/50 flex items-center justify-between">
-                        <span className="truncate mr-2">{job.branch}</span>
-                        <CopyableText text={job.branch} variant="id" />
+                    <div className="text-sm font-mono text-zinc-300 bg-zinc-950/50 px-2 py-1.5 rounded border border-zinc-800/50">
+                        <CopyableText 
+                          text={job.branch} 
+                          variant="id" 
+                          className="text-zinc-300"
+                        />
                     </div>
                   </div>
 
                   {/* Commit SHA */}
                   <div>
-                    {/* 🟢 修改点：标题作为跳转入口 */}
                     <div className="flex items-center gap-2 mb-1.5">
                         <a 
                             href={`https://github.com/${job.namespace}/${job.repo_name}/commit/${job.commit_sha}`}
@@ -275,14 +217,16 @@ export default function JobDetailsPage() {
                             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
                         </a>
                     </div>
-                    <div className="text-sm font-mono text-zinc-400 bg-zinc-950/50 px-2 py-1.5 rounded border border-zinc-800/50 flex items-center justify-between">
-                        <span className="truncate mr-2">{job.commit_sha.substring(0, 7)}...</span>
-                        <CopyableText text={job.commit_sha} variant="id" />
+                    <div className="text-sm font-mono text-zinc-400 bg-zinc-950/50 px-2 py-1.5 rounded border border-zinc-800/50">
+                        <CopyableText 
+                          text={job.commit_sha} 
+                          copyValue={job.commit_sha}
+                          variant="id" 
+                        />
                     </div>
                   </div>
 
               </div>
-
             </div>
           </div>
 
@@ -316,7 +260,7 @@ export default function JobDetailsPage() {
               <CopyableText 
                 text={job.entry_command} 
                 variant="text" 
-                className="text-xs font-mono text-green-400 leading-relaxed" 
+                className="text-xs font-mono text-green-400 leading-relaxed [&_span]:whitespace-pre-wrap"
               />
             </div>
           </div>
@@ -355,7 +299,11 @@ export default function JobDetailsPage() {
             ) : (
                <div className="h-full flex flex-col items-center justify-center text-zinc-600 gap-3">
                   <Terminal className="w-10 h-10 opacity-20" />
-                  <p>Waiting for output...</p>
+                  <p>
+                    {['Pending', 'Running'].includes(job.status) 
+                      ? "Waiting for output..." 
+                      : "No output generated during execution"}
+                  </p>
                </div>
             )}
             <div ref={logEndRef} />

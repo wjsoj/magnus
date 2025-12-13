@@ -22,17 +22,63 @@ export function CopyableText({
   const [copied, setCopied] = useState(false);
   const valueToCopy = copyValue || text;
 
-  const handleCopy = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(valueToCopy);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  // 1. 传统兼容方案 (Fallback): 用于 HTTP 环境
+  const copyLegacy = (content: string) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = content;
+    
+    // 移出可视区域但保持在 DOM 中
+    textArea.style.position = "fixed"; 
+    textArea.style.left = "-9999px";
+    textArea.style.top = "0";
+    
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    
+    try {
+      document.execCommand('copy');
+      return true;
+    } catch (err) {
+      console.error("Legacy copy failed", err);
+      return false;
+    } finally {
+      document.body.removeChild(textArea);
+    }
   };
 
+  // 2. 主处理逻辑: 优先现代 API -> 失败则降级
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    
+    let success = false;
+
+    // 检测是否支持现代 API (HTTPS/Localhost)
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(valueToCopy);
+        success = true;
+      } catch (err) {
+        // 权限拒绝等情况，尝试降级
+        success = copyLegacy(valueToCopy);
+      }
+    } else {
+      // HTTP 环境，直接使用降级方案
+      success = copyLegacy(valueToCopy);
+    }
+
+    if (success) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      alert("Copy failed. Please manually select and copy.");
+    }
+  };
 
   const baseStyles = variant === "id" 
     ? "text-xs text-zinc-500 font-mono" 
     : "w-full";
+    
   return (
     <button 
       onClick={handleCopy}

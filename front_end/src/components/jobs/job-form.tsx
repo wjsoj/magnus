@@ -1,7 +1,7 @@
 // front_end/src/components/jobs/job-form.tsx
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NumberStepper } from "@/components/ui/number-stepper";
 import { client } from "@/lib/api"; 
@@ -44,7 +44,6 @@ interface JobFormProps {
 }
 
 export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobFormProps) {
-  // State Initialization
   const [taskName, setTaskName] = useState(initialData?.taskName || "");
   const [description, setDescription] = useState(initialData?.description || "");
   const [namespace, setNamespace] = useState(initialData?.namespace || "PKU-Plasma");
@@ -57,7 +56,7 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
   const [selectedCommit, setSelectedCommit] = useState(initialData?.commit_sha || "");
   const [command, setCommand] = useState(initialData?.entry_command || "");
   
-  // Logic: 如果初始数据是 0 GPU，强制类型为 CPU，防止前端状态不一致
+  // 0 GPU 强制设为 CPU 类型
   const [gpuCount, setGpuCount] = useState(initialData?.gpu_count ?? 1);
   const [gpuType, setGpuType] = useState(
     initialData?.gpu_type || (initialData?.gpu_count === 0 ? "cpu" : "")
@@ -80,21 +79,11 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
     }
   }, [command]);
 
-  // Init for Clone Mode
-  useEffect(() => {
-    if (mode === 'clone' && initialData) {
-        setHasScanned(true); 
-        fetchBranches();
-    }
-  }, []); 
-
-  // --- Handlers ---
   const handleGpuTypeChange = (val: string) => {
     setGpuType(val);
     if (val === 'cpu') {
         setGpuCount(0);
     } else {
-        // 如果从 cpu (0) 切回 GPU，且当前数量为 0，则自动设为 1
         if (gpuCount === 0) setGpuCount(1);
     }
   };
@@ -108,7 +97,7 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   };
 
-  const fetchBranches = async () => {
+  const fetchBranches = useCallback(async () => {
     if (!namespace.trim()) { setErrorField("namespace"); setErrorMessage("⚠️ Namespace is required"); return; }
     if (!repoName.trim()) { setErrorField("repo"); setErrorMessage("⚠️ Repo Name is required"); return; }
     
@@ -133,7 +122,15 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
     } finally { 
       setLoading(false); 
     }
-  };
+  }, [namespace, repoName, mode]);
+
+  // Init for Clone Mode
+  useEffect(() => {
+    if (mode === 'clone' && initialData) {
+        setHasScanned(true); 
+        fetchBranches();
+    }
+  }, [mode, initialData, fetchBranches]); 
 
   // Fetch commits when branch changes
   useEffect(() => {

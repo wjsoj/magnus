@@ -12,12 +12,10 @@ class FeishuClient:
         self, 
         app_id: str, 
         app_secret: str, 
-        redirect_uri: str,
         verbose: bool = False,
     ):
         self.app_id = app_id
         self.app_secret = app_secret
-        self.redirect_uri = redirect_uri
         self.host = "https://open.feishu.cn"
         self.verbose = verbose
 

@@ -6,7 +6,14 @@ import path from 'path';
 
 export async function GET() {
   try {
-    const filePath = path.join(process.cwd(), '..', 'pictures', 'logo.png');
+    const filePath = path.join(
+      process.cwd(), 
+      '..', 
+      'front_end',
+      'src',
+      'app',
+      'icon.png',
+    );
     if (!fs.existsSync(filePath)) {
       return new NextResponse("Logo not found", { status: 404 });
     }

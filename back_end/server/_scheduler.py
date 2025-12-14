@@ -9,14 +9,18 @@ from .models import Job, JobStatus, JobType
 from library.functional._slurm_manager import SlurmManager, SlurmResourceError
 from ._magnus_config import magnus_config
 
+
 __all__ = [
     "scheduler",
 ]
 
+
 magnus_workspace_path = f"{magnus_config['server']['root']}/workspace"
 guarantee_file_exist(magnus_workspace_path, is_directory=True)
 
+
 logger = logging.getLogger(__name__)
+
 
 class MagnusScheduler:
     
@@ -48,6 +52,7 @@ class MagnusScheduler:
             except Exception as e:
                 logger.error(f"Scheduler tick failed: {e}", exc_info=True)
 
+    
     def _sync_reality(
         self, 
         db: Session,
@@ -92,6 +97,7 @@ class MagnusScheduler:
             
             db.commit()
 
+    
     def _make_decisions(
         self, 
         db: Session,
@@ -169,6 +175,7 @@ class MagnusScheduler:
                 logger.debug(f"Queue Blocked: Job {job.id} waiting for resources. Stopping scheduling.")
                 break
 
+    
     def _start_job(
         self, 
         db: Session, 
@@ -192,19 +199,20 @@ class MagnusScheduler:
             except OSError:
                 pass
 
-        # 1. 准备 Git 认证信息和 URL
+        # 准备 Git 认证信息和 URL
         github_token = magnus_config["server"]["github_client"]["token"]
         # 构造带 Token 的 URL 以支持私有仓库
         # 格式: https://oauth2:TOKEN@github.com/NAMESPACE/REPO.git
         auth_repo_url = f"https://oauth2:{github_token}@github.com/{job.namespace}/{job.repo_name}.git"
 
-        # 2. 构造 Python Wrapper 脚本内容
+        # 构造 Python Wrapper 脚本内容
         # 使用 repr() 确保路径和命令字符串在生成的脚本中是合法的 Python 字符串
         wrapper_content = f"""
 import os
 import sys
+import traceback
 import subprocess
-import time
+
 
 def main():
     # --- 配置注入 ---
@@ -217,32 +225,30 @@ def main():
     marker_path = {repr(success_marker_path)}
     
     # --- 阶段 1: 准备代码环境 ---
-    # 目标：保持 stdout 干净，除非出错才打印到 stderr
+    # 保持 stdout 干净，除非出错才打印到 stderr
     try:
-        if not os.path.exists(repo_dir):
-            # Clone 指定分支
-            # --single-branch 减少下载量
-            subprocess.check_call(
-                ["git", "clone", "--branch", branch, "--single-branch", repo_url, repo_dir],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE
-            )
+        # Clone 指定分支，--single-branch 减少下载量
+        subprocess.check_call(
+            ["git", "clone", "--branch", branch, "--single-branch", repo_url, repo_dir],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE
+        )
         
-        # 强制 Checkout 到指定 Commit (Model中该字段不可为空)
+        # Checkout 到指定 Commit
         subprocess.check_call(
             ["git", "checkout", commit_sha],
             cwd=repo_dir,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
         )
-            
-    except subprocess.CalledProcessError as e:
-        print("Magnus System Error: Failed to setup repository environment.", file=sys.stderr)
-        if e.stderr:
-            print(f"Git Error: {{e.stderr.decode().strip()}}", file=sys.stderr)
+    
+    except subprocess.CalledProcessError as error:
+        print(f"Magnus System Error: Failed to setup repository environment.\\nTraceback: \\n{{traceback.format_exc()}}", file=sys.stderr, flush=True)
+        if error.stderr:
+            print(f"Git Error: {{error.stderr.decode().strip()}}", file=sys.stderr, flush=True)
         sys.exit(1)
-    except Exception as e:
-        print(f"Magnus System Error: {{e}}", file=sys.stderr)
+    except Exception as error:
+        print(f"Magnus System Error: {{error}}", file=sys.stderr)
         sys.exit(1)
 
     # --- 阶段 2: 执行用户命令 ---
@@ -250,15 +256,22 @@ def main():
         # 切换到仓库根目录
         os.chdir(repo_dir)
         
-        # 切换到 Magnus 专属 Conda 环境
+        # 拿到原始命令
+        user_cmd_str = {repr(job.entry_command)}
         
+        # 拿到环境配置 (由外部注入)
+        conda_sh = "/home/zycai/miniconda3/etc/profile.d/conda.sh" 
+        target_env = "magnus"
         
-        # 用户命令注入
-        entry_cmd = {repr(job.entry_command)}
+        # 构造组合拳命令：source 脚本 -> 激活环境 -> 执行用户命令
+        full_command = f"source '{{conda_sh}}' && conda activate {{target_env}} && unset VIRTUAL_ENV && {{user_cmd_str}}"
         
-        # 启动子进程，实时流式输出 stdout/stderr
-        # shell=True 允许用户使用管道等 shell 特性
-        ret_code = subprocess.call(entry_cmd, shell=True)
+        # 显式调用 /bin/bash 执行（sh 不支持 source）
+        ret_code = subprocess.call(
+            full_command, 
+            shell=True, 
+            executable="/bin/bash",
+        )
         
         if ret_code == 0:
             # 成功：创建信标
@@ -268,12 +281,14 @@ def main():
         else:
             # 失败：原样返回退出码，SLURM 会捕获
             sys.exit(ret_code)
-            
-    except Exception as e:
-        print(f"Magnus Execution Error: {{e}}", file=sys.stderr)
+    
+    except Exception as error:
+        print(f"Magnus Execution Error: {{error}}\\nTraceback: \\n{{traceback.format_exc()}}", file=sys.stderr)
         sys.exit(1)
 
+
 if __name__ == "__main__":
+
     main()
 """
         
@@ -316,6 +331,7 @@ if __name__ == "__main__":
             db.commit()
             return False
 
+    
     def _kill_and_pause(
         self, 
         db: Session, 
@@ -332,5 +348,6 @@ if __name__ == "__main__":
         job.slurm_job_id = None
         job.start_time = None
         db.commit()
+
 
 scheduler = MagnusScheduler()

@@ -6,7 +6,7 @@
 ![Next.js](https://img.shields.io/badge/Next.js-14-black)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-teal)
 
-**Magnus** 是一个为 PKU-Plasma 设计的全栈机器学习训练平台，集成了智能调度、集群管理、用户认证等企业级功能。
+**Magnus** 是一个为 PKU-Plasma 设计的全栈科学计算与机器学习平台，集成了智能调度、资源监控、用户认证等企业级功能。
 
 ## 🚀 核心特性
 
@@ -51,9 +51,9 @@ Magnus-Platform/
 │   │   ├── functional/       # 功能模块
 │   │   │   └── _slurm_manager.py  # 🆕 SLURM集群管理器
 │   │   └── fundamental/      # 基础工具模块
-│   ├── scripts/              # 脚本目录
+│   ├── python_scripts/      # 脚本目录
 │   │   └── tests/           # 测试工具
-│   │       └── test_rtx5090_nvlink/  # GPU互联测试
+│   │       └── test_rtx5090_nvlink.py  # GPU互联测试
 │   ├── pyproject.toml        # Python 项目配置
 │   ├── run.py               # 后端启动入口
 │   └── run.sh               # 启动脚本

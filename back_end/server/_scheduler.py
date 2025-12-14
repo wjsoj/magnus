@@ -189,6 +189,9 @@ class MagnusScheduler:
         job_working_table = f"{magnus_workspace_path}/jobs/{job.id}"
         guarantee_file_exist(f"{job_working_table}/slurm", is_directory=True)
         
+        magnus_uv_cache = f"{magnus_config['server']['root']}/uv_cache"
+        guarantee_file_exist(magnus_uv_cache, is_directory=True)
+        
         # 定义成功信标路径
         success_marker_path = f"{job_working_table}/.magnus_success"
         
@@ -198,24 +201,22 @@ class MagnusScheduler:
                 os.remove(success_marker_path)
             except OSError:
                 pass
-
-        # 准备 Git 认证信息和 URL
-        github_token = magnus_config["server"]["github_client"]["token"]
-        # 构造带 Token 的 URL 以支持私有仓库
-        # 格式: https://oauth2:TOKEN@github.com/NAMESPACE/REPO.git
-        auth_repo_url = f"https://oauth2:{github_token}@github.com/{job.namespace}/{job.repo_name}.git"
+        
+        # 用 ssh 连 github
+        auth_repo_url = f"git@github.com:{job.namespace}/{job.repo_name}.git"
+        
+        conda_shell_script_path = magnus_config["server"]["scheduler"]["conda_shell_script_path"]
+        execution_conda_environment = magnus_config["server"]["scheduler"]["execution_conda_environment"]
 
         # 构造 Python Wrapper 脚本内容
-        # 使用 repr() 确保路径和命令字符串在生成的脚本中是合法的 Python 字符串
-        wrapper_content = f"""
-import os
+        wrapper_content = f"""import os
 import sys
 import traceback
 import subprocess
 
 
 def main():
-    # --- 配置注入 ---
+
     repo_url = {repr(auth_repo_url)}
     branch = {repr(job.branch)}
     commit_sha = {repr(job.commit_sha)}
@@ -260,17 +261,23 @@ def main():
         user_cmd_str = {repr(job.entry_command)}
         
         # 拿到环境配置 (由外部注入)
-        conda_sh = "/home/zycai/miniconda3/etc/profile.d/conda.sh" 
-        target_env = "magnus"
+        conda_shell_script_path = {repr(conda_shell_script_path)}
+        execution_conda_environment = {repr(execution_conda_environment)}
         
         # 构造组合拳命令：source 脚本 -> 激活环境 -> 执行用户命令
-        full_command = f"source '{{conda_sh}}' && conda activate {{target_env}} && unset VIRTUAL_ENV && {{user_cmd_str}}"
+        full_command = " && ".join([
+            f"source '{{conda_shell_script_path}}'",
+            f"conda activate {{execution_conda_environment}}",
+            "unset VIRTUAL_ENV",
+            "export UV_CACHE_DIR={magnus_uv_cache}",
+            f"{{user_cmd_str}}"
+        ])
         
         # 显式调用 /bin/bash 执行（sh 不支持 source）
         ret_code = subprocess.call(
-            full_command, 
-            shell=True, 
-            executable="/bin/bash",
+            full_command,
+            shell = True,
+            executable = "/bin/bash",
         )
         
         if ret_code == 0:

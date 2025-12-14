@@ -9,18 +9,14 @@ from .models import Job, JobStatus, JobType
 from library.functional._slurm_manager import SlurmManager, SlurmResourceError
 from ._magnus_config import magnus_config
 
-
 __all__ = [
     "scheduler",
 ]
 
-
 magnus_workspace_path = f"{magnus_config['server']['root']}/workspace"
 guarantee_file_exist(magnus_workspace_path, is_directory=True)
 
-
 logger = logging.getLogger(__name__)
-
 
 class MagnusScheduler:
     
@@ -35,7 +31,6 @@ class MagnusScheduler:
             logger.critical(f"Scheduler disabled due to missing SLURM: {e}")
             self.enabled = False
 
-    
     def tick(
         self,
     ):
@@ -53,12 +48,10 @@ class MagnusScheduler:
             except Exception as e:
                 logger.error(f"Scheduler tick failed: {e}", exc_info=True)
 
-    
     def _sync_reality(
         self, 
         db: Session,
     ):
-        
         """
         第一阶段：同步现实世界 (SLURM) 的状态到数据库
         """
@@ -99,7 +92,6 @@ class MagnusScheduler:
             
             db.commit()
 
-    
     def _make_decisions(
         self, 
         db: Session,
@@ -176,46 +168,128 @@ class MagnusScheduler:
                 # 队首任务受阻，立刻中断循环，禁止后续任务插队
                 logger.debug(f"Queue Blocked: Job {job.id} waiting for resources. Stopping scheduling.")
                 break
-    
-    
+
     def _start_job(
         self, 
         db: Session, 
         job: Job
-    )-> bool:
-        
+    ) -> bool:
         """
         原子操作：提交 SLURM + 更新 DB
+        使用 Python Wrapper 自动处理带认证的 Git Clone
         """
         
         job_working_table = f"{magnus_workspace_path}/jobs/{job.id}"
         guarantee_file_exist(f"{job_working_table}/slurm", is_directory=True)
         
-        # 定义成功信标路径 (业务逻辑)
+        # 定义成功信标路径
         success_marker_path = f"{job_working_table}/.magnus_success"
         
-        # 清理旧信标 (防止重试任务读取到上一次的成功状态)
+        # 清理旧信标
         if os.path.exists(success_marker_path):
             try:
                 os.remove(success_marker_path)
             except OSError:
                 pass
 
-        # 构造 Spy Command (间谍脚本)
-        # 逻辑：执行用户命令 -> 捕获退出码 -> 若为0则Touch信标 -> 退出并返回原退出码
-        # 这样 Slurm 依然能记录到 FAILED 状态（如果脚本返回非0），同时 Magnus 也能区分 scancel
-        spy_command = (
-            "#!/bin/bash\n"
-            "set -o errexit\n" # 遇到错误立即退出
-            f"{job.entry_command}\n"
-            f"touch '{success_marker_path}'\n"
-        )
+        # 1. 准备 Git 认证信息和 URL
+        github_token = magnus_config["server"]["github_client"]["token"]
+        # 构造带 Token 的 URL 以支持私有仓库
+        # 格式: https://oauth2:TOKEN@github.com/NAMESPACE/REPO.git
+        auth_repo_url = f"https://oauth2:{github_token}@github.com/{job.namespace}/{job.repo_name}.git"
+
+        # 2. 构造 Python Wrapper 脚本内容
+        # 使用 repr() 确保路径和命令字符串在生成的脚本中是合法的 Python 字符串
+        wrapper_content = f"""
+import os
+import sys
+import subprocess
+import time
+
+def main():
+    # --- 配置注入 ---
+    repo_url = {repr(auth_repo_url)}
+    branch = {repr(job.branch)}
+    commit_sha = {repr(job.commit_sha)}
+    
+    work_dir = {repr(job_working_table)}
+    repo_dir = os.path.join(work_dir, "repository")
+    marker_path = {repr(success_marker_path)}
+    
+    # --- 阶段 1: 准备代码环境 ---
+    # 目标：保持 stdout 干净，除非出错才打印到 stderr
+    try:
+        if not os.path.exists(repo_dir):
+            # Clone 指定分支
+            # --single-branch 减少下载量
+            subprocess.check_call(
+                ["git", "clone", "--branch", branch, "--single-branch", repo_url, repo_dir],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE
+            )
         
+        # 强制 Checkout 到指定 Commit (Model中该字段不可为空)
+        subprocess.check_call(
+            ["git", "checkout", commit_sha],
+            cwd=repo_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE
+        )
+            
+    except subprocess.CalledProcessError as e:
+        print("Magnus System Error: Failed to setup repository environment.", file=sys.stderr)
+        if e.stderr:
+            print(f"Git Error: {{e.stderr.decode().strip()}}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Magnus System Error: {{e}}", file=sys.stderr)
+        sys.exit(1)
+
+    # --- 阶段 2: 执行用户命令 ---
+    try:
+        # 切换到仓库根目录
+        os.chdir(repo_dir)
+        
+        # 切换到 Magnus 专属 Conda 环境
+        
+        
+        # 用户命令注入
+        entry_cmd = {repr(job.entry_command)}
+        
+        # 启动子进程，实时流式输出 stdout/stderr
+        # shell=True 允许用户使用管道等 shell 特性
+        ret_code = subprocess.call(entry_cmd, shell=True)
+        
+        if ret_code == 0:
+            # 成功：创建信标
+            with open(marker_path, "w") as f:
+                f.write("success")
+            sys.exit(0)
+        else:
+            # 失败：原样返回退出码，SLURM 会捕获
+            sys.exit(ret_code)
+            
+    except Exception as e:
+        print(f"Magnus Execution Error: {{e}}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+"""
+        
+        # 将 Wrapper 写入文件
+        wrapper_path = f"{job_working_table}/wrapper.py"
         try:
-            # 这里的 submit_job 模拟了 --immediate 模式
-            # 如果资源不足，会抛出 SlurmResourceError
+            with open(wrapper_path, "w", encoding="utf-8") as f:
+                f.write(wrapper_content)
+        except IOError as e:
+            logger.error(f"Failed to write wrapper script for Job {job.id}: {e}")
+            return False
+
+        try:
+            # 提交任务：运行 wrapper.py
             slurm_id = self.slurm_manager.submit_job(
-                entry_command = spy_command,  # 传入劫持后的命令
+                entry_command = f"python3 {wrapper_path}",
                 gpus = job.gpu_count,
                 job_name = job.task_name,
                 gpu_type = job.gpu_type,
@@ -226,31 +300,27 @@ class MagnusScheduler:
             
             job.status = JobStatus.RUNNING
             job.slurm_job_id = slurm_id
-            job.start_time = datetime.utcnow() # 记录开始时间，用于 LIFO 排序
+            job.start_time = datetime.utcnow()
             db.commit()
             
-            logger.info(f"Job {job.id} started successfully (SLURM ID: {slurm_id})")
+            logger.info(f"Job {job.id} started (SLURM: {slurm_id}, Branch: {job.branch})")
             return True
             
         except SlurmResourceError:
-            # 资源竞争失败 (可能被外部人员抢了，或者刚刚 kill 的资源还没释放完)
             logger.warning(f"Job {job.id} submission failed: Resources unavailable immediately.")
             return False
             
         except Exception as error:
-            # 其他严重错误 (比如 sbatch 命令写错)
             logger.error(f"Job {job.id} submission error: {error}")
             job.status = JobStatus.FAILED
             db.commit()
             return False
-    
-    
+
     def _kill_and_pause(
         self, 
         db: Session, 
         job: Job,
     ):
-        
         """
         残忍操作：Kill SLURM Job -> 标记为 Paused
         """
@@ -262,6 +332,5 @@ class MagnusScheduler:
         job.slurm_job_id = None
         job.start_time = None
         db.commit()
-
 
 scheduler = MagnusScheduler()

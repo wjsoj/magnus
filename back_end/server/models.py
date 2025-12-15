@@ -31,6 +31,7 @@ class JobStatus(str, enum.Enum):
     PAUSED  = "Paused"
     SUCCESS = "Success"
     FAILED  = "Failed"
+    TERMINATED = "Terminated"
 
 
 class User(Base):

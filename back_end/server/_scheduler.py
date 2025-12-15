@@ -355,6 +355,8 @@ if __name__ == "__main__":
         if job.slurm_job_id:
             logger.info(f"Killing victim job {job.id} (SLURM: {job.slurm_job_id})")
             self.slurm_manager.kill_job(job.slurm_job_id)
+            
+        self._clean_up_working_table(job.id)
         
         job.status = JobStatus.PAUSED
         job.slurm_job_id = None

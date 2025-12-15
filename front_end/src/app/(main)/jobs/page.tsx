@@ -1,8 +1,11 @@
+// front_end/src/app/(main)/jobs/page.tsx
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Plus, Search, RefreshCw, Box, Rocket, Loader2, User as UserIcon, Tag } from "lucide-react";
-import JobForm, { JobFormData } from "@/components/jobs/job-form";
+import { Plus, Search, RefreshCw, Box, Loader2, SquareX } from "lucide-react";
+import { JobFormData } from "@/components/jobs/job-form";
+import { JobDrawer } from "@/components/jobs/job-drawer";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { CopyableText } from "@/components/ui/copyable-text";
 import { PaginationControls } from "@/components/ui/pagination-controls";
@@ -14,40 +17,7 @@ import { Job, User } from "@/types/job";
 import { formatBeijingTime } from "@/lib/utils";
 import { JobPriorityBadge } from "@/components/jobs/job-priority-badge";
 import { JobStatusBadge } from "@/components/jobs/job-status-badge";
-
-function UserAvatar({ user, subText }: { user?: User, subText?: React.ReactNode }) {
-  if (!user) {
-    return (
-      <div className="w-8 h-8 rounded-full bg-zinc-800 flex items-center justify-center border border-zinc-700">
-         <UserIcon className="w-4 h-4 text-zinc-500" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-3">
-      {user.avatar_url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img 
-          src={user.avatar_url} 
-          alt={user.name} 
-          className="w-8 h-8 rounded-full border border-zinc-700/50 object-cover shadow-sm flex-shrink-0"
-        />
-      ) : (
-        <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xs font-bold border border-indigo-500/30 flex-shrink-0">
-          {user.name.substring(0, 2).toUpperCase()}
-        </div>
-      )}
-      
-      <div className="flex flex-col gap-0.5">
-        <span className="text-sm font-medium text-zinc-200 leading-none">{user.name}</span>
-        {subText && (
-           <span className="text-xs text-zinc-500 font-mono tracking-tight leading-none">{subText}</span>
-        )}
-      </div>
-    </div>
-  );
-}
+import { UserAvatar } from "@/components/ui/user-avatar";
 
 export default function JobsPage() {
   const router = useRouter();
@@ -69,6 +39,10 @@ export default function JobsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
+
+  // --- Terminate Dialog State ---
+  const [jobToTerminate, setJobToTerminate] = useState<Job | null>(null);
+  const [isTerminating, setIsTerminating] = useState(false);
 
   const skip = (currentPage - 1) * pageSize;
 
@@ -173,8 +147,40 @@ export default function JobsPage() {
     setIsDrawerOpen(true);
   };
 
+  // 触发弹窗
+  const onClickTerminate = (job: Job) => {
+    setJobToTerminate(job);
+  };
+
+  // 执行终止
+  const executeTermination = async () => {
+    if (!jobToTerminate) return;
+    setIsTerminating(true);
+    try {
+        await client(`/api/jobs/${jobToTerminate.id}/terminate`, { method: "POST" });
+        fetchJobs(); 
+        setJobToTerminate(null); // 关闭弹窗
+    } catch (e) {
+        alert("Failed to terminate job"); // 这里的错误处理还是保留简单的 alert，避免引入 Toast
+        console.error(e);
+    } finally {
+        setIsTerminating(false);
+    }
+  };
+
   return (
     <div className="relative min-h-[calc(100vh-8rem)] pb-20"> 
+
+      {/* 隐藏全局滚动条但保留滚动功能 */}
+      <style jsx global>{`
+        ::-webkit-scrollbar {
+          display: none;
+        }
+        html {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+      `}</style>
       
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
@@ -249,102 +255,122 @@ export default function JobsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/50">
-                  {jobs.map((job) => (
-                    <tr 
-                      key={job.id} 
-                      onClick={() => router.push(`/jobs/${job.id}`)}
-                      className="hover:bg-zinc-800/40 transition-colors group border-b border-zinc-800/50 last:border-0"
-                    >
-                      
-                      {/* Task / Task ID */}
-                      <td className="px-6 py-4 align-top whitespace-normal break-all">
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex items-center gap-2">
-                              <CopyableText 
-                                text={job.task_name} 
-                                variant="text" 
-                                className="font-semibold text-zinc-200 text-base" 
+                  {jobs.map((job) => {
+                    // 判断是否显示终止按钮
+                    const isActive = ['Pending', 'Running', 'Paused'].includes(job.status);
+                    const isOwner = currentUser?.id === job.user?.id;
+                    const canTerminate = isOwner && isActive;
+
+                    return (
+                      <tr 
+                        key={job.id} 
+                        onClick={() => router.push(`/jobs/${job.id}`)}
+                        className="hover:bg-zinc-800/40 transition-colors group border-b border-zinc-800/50 last:border-0"
+                      >
+                        
+                        {/* Task / Task ID */}
+                        <td className="px-6 py-4 align-top whitespace-normal break-all">
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-2">
+                                <CopyableText 
+                                  text={job.task_name} 
+                                  variant="text" 
+                                  className="font-semibold text-zinc-200 text-base" 
+                                />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <CopyableText text={job.id} className="text-[10px] uppercase tracking-wider" />
+                            </div>
+                            {job.description && (
+                              <p className="text-zinc-500 text-xs line-clamp-1 mt-0.5">{job.description}</p>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Priority */}
+                        <td className="px-6 py-4 align-top text-center">
+                            <JobPriorityBadge type={job.job_type} />
+                        </td>
+
+                        {/* Status */}
+                        <td className="px-6 py-4 align-top text-center">
+                          <JobStatusBadge status={job.status} />
+                        </td>
+
+                        {/* Github */}
+                        <td className="px-6 py-4 align-top">
+                            <div className="flex flex-col gap-1.5 items-center">
+                                <span className="text-zinc-300 flex items-center gap-2 text-xs font-medium bg-zinc-900/50 w-fit px-2 py-1 rounded border border-zinc-800">
+                                  <Box className="w-3.5 h-3.5 text-zinc-500"/> 
+                                  {job.namespace} / {job.repo_name}
+                                </span>
+                                <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono ml-1">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-zinc-600 flex-shrink-0"></div>
+                                  <span 
+                                    className="truncate max-w-[80px] sm:max-w-[140px] xl:max-w-[200px]" 
+                                    title={job.branch}
+                                  >
+                                    {job.branch}
+                                  </span>
+                                  <span className="text-zinc-700 flex-shrink-0">|</span>
+                                  <span className="bg-zinc-800 px-1.5 rounded text-zinc-400 flex-shrink-0">
+                                    {job.commit_sha.substring(0, 7)}
+                                  </span>
+                                </div>
+                            </div>
+                        </td>
+
+                        {/* Resources */}
+                        <td className="px-6 py-4 align-top text-center">
+                            <span className="text-zinc-300 text-sm font-medium">
+                                {job.gpu_type === 'cpu' 
+                                    ? 'cpu only'
+                                    : `${job.gpu_type.replace(/_/g, ' ')} × ${job.gpu_count}`
+                                }
+                            </span>
+                        </td>
+
+                        {/* Creator */}
+                        <td className="px-6 py-4 align-top">
+                          <div className="flex justify-center">
+                              <UserAvatar 
+                                user={job.user} 
+                                subText={formatBeijingTime(job.created_at)} 
                               />
                           </div>
-                          <div className="flex items-center gap-2">
-                            <CopyableText text={job.id} className="text-[10px] uppercase tracking-wider" />
+                        </td>
+
+                        {/* Actions */}
+                        <td className="px-6 py-4 align-middle text-right">
+                          <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
+                            <button 
+                                onClick={(e) => {
+                                    e.stopPropagation(); 
+                                    handleCloneJob(job); 
+                                }}
+                                className="p-2 bg-zinc-800 hover:bg-zinc-700 hover:text-white rounded-lg text-zinc-400 transition-colors border border-zinc-700/50 shadow-sm" 
+                                title="Clone & Rerun"
+                            >
+                              <RefreshCw className="w-4 h-4" />
+                            </button>
+
+                            {canTerminate && (
+                              <button 
+                                  onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    onClickTerminate(job);
+                                  }}
+                                  className="p-2 bg-red-950/30 hover:bg-red-900/50 text-red-400 hover:text-red-300 rounded-lg transition-colors border border-red-900/30" 
+                                  title="Terminate Job"
+                              >
+                                  <SquareX className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
-                          {job.description && (
-                            <p className="text-zinc-500 text-xs line-clamp-1 mt-0.5">{job.description}</p>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Priority */}
-                      <td className="px-6 py-4 align-top text-center">
-                          <JobPriorityBadge type={job.job_type} />
-                      </td>
-
-                      {/* Status */}
-                      <td className="px-6 py-4 align-top text-center">
-                        <JobStatusBadge status={job.status} />
-                      </td>
-
-                      {/* Github */}
-                      <td className="px-6 py-4 align-top">
-                          <div className="flex flex-col gap-1.5 items-center">
-                              <span className="text-zinc-300 flex items-center gap-2 text-xs font-medium bg-zinc-900/50 w-fit px-2 py-1 rounded border border-zinc-800">
-                                <Box className="w-3.5 h-3.5 text-zinc-500"/> 
-                                {job.namespace} / {job.repo_name}
-                              </span>
-                              <div className="flex items-center gap-2 text-xs text-zinc-500 font-mono ml-1">
-                                <div className="w-1.5 h-1.5 rounded-full bg-zinc-600 flex-shrink-0"></div>
-                                <span 
-                                  className="truncate max-w-[80px] sm:max-w-[140px] xl:max-w-[200px]" 
-                                  title={job.branch}
-                                >
-                                  {job.branch}
-                                </span>
-                                <span className="text-zinc-700 flex-shrink-0">|</span>
-                                <span className="bg-zinc-800 px-1.5 rounded text-zinc-400 flex-shrink-0">
-                                  {job.commit_sha.substring(0, 7)}
-                                </span>
-                              </div>
-                          </div>
-                      </td>
-
-                      {/* Resources */}
-                      <td className="px-6 py-4 align-top text-center">
-                          <span className="text-zinc-300 text-sm font-medium">
-                              {job.gpu_type === 'cpu' 
-                                  ? 'cpu only'
-                                  : `${job.gpu_type.replace(/_/g, ' ')} × ${job.gpu_count}`
-                              }
-                          </span>
-                      </td>
-
-                      {/* Creator */}
-                      <td className="px-6 py-4 align-top">
-                        <div className="flex justify-center">
-                            <UserAvatar 
-                              user={job.user} 
-                              subText={formatBeijingTime(job.created_at)} 
-                            />
-                        </div>
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-6 py-4 align-middle text-right">
-                        <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
-                          <button 
-                              onClick={(e) => {
-                                  e.stopPropagation(); // 防止点击 Clone 跳进详情页
-                                  handleCloneJob(job); 
-                              }}
-                              className="p-2 bg-zinc-800 hover:bg-zinc-700 hover:text-white rounded-lg text-zinc-400 transition-colors border border-zinc-700/50 shadow-sm" 
-                              title="Clone & Rerun"
-                          >
-                            <RefreshCw className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -366,39 +392,35 @@ export default function JobsPage() {
         )}
       </div>
 
-      {isDrawerOpen && (
-        <div 
-          onClick={() => setIsDrawerOpen(false)} 
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[90] transition-opacity" 
-        />
-      )}
+      <JobDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        onSuccess={() => {
+            setIsDrawerOpen(false);
+            fetchJobs();
+        }}
+        mode={drawerMode}
+        initialData={cloneData}
+        formKey={drawerMode + (selectedJobId || "")}
+      />
 
-      <div className={`fixed top-0 right-0 h-full w-[600px] bg-[#09090b] border-l border-zinc-800 shadow-2xl z-[100] transform transition-transform duration-300 ease-in-out ${isDrawerOpen ? 'translate-x-0' : 'translate-x-full'}`}>
-        <div className="h-full flex flex-col relative">
-          <div className="px-6 py-5 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50 backdrop-blur-sm">
-            <div>
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                    {drawerMode === 'create' ? <Rocket className="w-5 h-5 text-blue-500"/> : <RefreshCw className="w-5 h-5 text-purple-500"/>}
-                    {drawerMode === 'create' ? "Submit New Job" : `Clone Job`}
-                </h2>
-                {drawerMode === 'clone' && <p className="text-xs text-zinc-500 mt-1">Configurations pre-filled from previous task</p>}
-            </div>
-            <button onClick={() => setIsDrawerOpen(false)} className="text-zinc-500 hover:text-white transition-colors bg-zinc-800/50 hover:bg-zinc-700 p-1.5 rounded-md">✕</button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar relative">
-            <JobForm 
-                key={drawerMode + (selectedJobId || "")} 
-                mode={drawerMode}
-                initialData={cloneData}
-                onCancel={() => setIsDrawerOpen(false)}
-                onSuccess={() => {
-                   setIsDrawerOpen(false);
-                   fetchJobs(); 
-                }}
-            />
-          </div>
-        </div>
-      </div>
+      {/* --- Confirmation Dialog --- */}
+      <ConfirmationDialog
+        isOpen={!!jobToTerminate}
+        onClose={() => setJobToTerminate(null)}
+        onConfirm={executeTermination}
+        title="Terminate Task?"
+        description={
+          <span>
+            Are you sure you want to terminate <strong>{jobToTerminate?.task_name}</strong>? 
+            <br />
+            This action will stop the process immediately and cannot be undone.
+          </span>
+        }
+        confirmText="Terminate"
+        variant="danger"
+        isLoading={isTerminating}
+      />
     </div>
   );
 }

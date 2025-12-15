@@ -2,11 +2,14 @@
 import os
 import jwt
 import logging
+from typing import List, Optional
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import List, Optional
+
 from library import *
 from . import database
 from . import models
@@ -24,10 +27,9 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/feishu/login")
+
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme), 
@@ -58,7 +60,9 @@ async def get_current_user(
         
     return user
 
+
 # ================= GitHub Routes =================
+
 
 @router.get("/github/{ns}/{repo}/branches")
 async def get_branches(ns: str, repo: str):
@@ -70,6 +74,7 @@ async def get_branches(ns: str, repo: str):
         )
     return branches
 
+
 @router.get("/github/{ns}/{repo}/commits")
 async def get_commits(
     ns: str, 
@@ -78,7 +83,9 @@ async def get_commits(
 ):
     return await github_client.fetch_commits(ns, repo, branch)
 
+
 # ================= Job Routes =================
+
 
 @router.post(
     "/jobs/submit", 
@@ -91,17 +98,15 @@ async def submit_job(
 ):
     """
     提交新任务。
-    注意：此接口不再直接与 SLURM 交互。
-    它只负责将任务写入数据库，状态设为 PENDING。
-    后台的 Scheduler 会自动捡起它并处理排队/抢占逻辑。
+    注意：此接口不再直接与 SLURM 交互，只负责写入数据库 (PENDING)。
+    后台 Scheduler 会自动处理排队/抢占逻辑。
     """
     job_dict = job_data.model_dump()
     
-    # 创建任务对象
     db_job = models.Job(
         **job_dict, 
         user_id=current_user.id,
-        status=JobStatus.PENDING # 显式设为排队状态
+        status=JobStatus.PENDING 
     )
     
     db.add(db_job)
@@ -109,6 +114,7 @@ async def submit_job(
     db.refresh(db_job)
     
     return db_job
+
 
 @router.get(
     "/jobs", 
@@ -121,12 +127,8 @@ async def get_jobs(
     creator_id: Optional[str] = None,
     db: Session = Depends(database.get_db),
 ):
-    """
-    获取任务列表（分页 + 搜索 + 筛选）
-    """
     query = db.query(models.Job)
 
-    # 1. 搜索逻辑 (支持搜 ID 或 任务名)
     if search:
         search_pattern = f"%{search}%"
         query = query.filter(
@@ -136,15 +138,11 @@ async def get_jobs(
             )
         )
     
-    # 2. 用户筛选逻辑
     if creator_id and creator_id != "all":
         query = query.filter(models.Job.user_id == creator_id)
 
-    # 3. 计算总数
     total = query.count()
 
-    # 4. 分页查询
-    # 按创建时间倒序
     jobs = query.order_by(models.Job.created_at.desc())\
             .offset(skip).limit(limit).all()
             
@@ -159,9 +157,6 @@ async def get_job_detail(
     job_id: str,
     db: Session = Depends(database.get_db),
 ):
-    """
-    获取单个任务的详细信息
-    """
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -176,20 +171,16 @@ async def get_job_logs(
     db: Session = Depends(database.get_db),
 ):
     """
-    获取任务的实时日志 (MVP方案: 直接全量读取 Slurm output 文件)
+    获取任务实时日志 (直接读取 Slurm output 文件)
     """
-    # 1. 确认任务存在
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # 2. 构造日志路径
     root_path = magnus_config['server']['root']
     log_path = f"{root_path}/workspace/jobs/{job_id}/slurm/output.txt"
 
-    # 3. 读取日志
     if not os.path.exists(log_path):
-        # 这种情况很正常：任务处于 Pending 状态，或者刚启动文件还没生成
         return {"logs": "Waiting for output stream... (Job might be PENDING or Initializing)"}
 
     try:
@@ -202,7 +193,132 @@ async def get_job_logs(
         return {"logs": f"Error reading logs: {str(e)}"}
 
 
+@router.post("/jobs/{job_id}/terminate")
+async def terminate_job(
+    job_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    用户主动终止任务：scancel + DB状态更新
+    """
+    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.user_id != current_user.id:
+         raise HTTPException(status_code=403, detail="Not authorized to terminate this job")
+
+    if job.slurm_job_id:
+        try:
+            manager = SlurmManager()
+            manager.kill_job(job.slurm_job_id)
+        except Exception as e:
+            logger.warning(f"Failed to kill Slurm job {job.slurm_job_id}: {e}")
+
+    job.status = models.JobStatus.TERMINATED
+    db.commit()
+    db.refresh(job)
+    
+    return {"message": "Job terminated", "status": job.status}
+
+
+# ================= Cluster & Dashboard Routes =================
+
+
+def _scheduler_sort_key(job):
+    """
+    复刻调度器排序逻辑：优先级 (A1>A2>B1>B2) > 时间 (FIFO)
+    """
+    priority_map = {
+        JobType.A1: 4, JobType.A2: 3,
+        JobType.B1: 2, JobType.B2: 1,
+    }
+    p_score = priority_map.get(job.job_type, 0)
+    return (p_score, -job.created_at.timestamp())
+
+
+@router.get(
+    "/cluster/stats",
+    response_model=ClusterStatsResponse,
+)
+async def get_cluster_stats(
+    db: Session = Depends(database.get_db),
+):
+    # 1. Running Jobs (按开始时间倒序，最新跑的在上面)
+    running_jobs_orm = db.query(models.Job).filter(
+        models.Job.status == JobStatus.RUNNING
+    ).order_by(models.Job.start_time.desc()).all()
+
+    # 2. Pending Jobs (复刻调度器逻辑)
+    pending_jobs_orm = db.query(models.Job).filter(
+        models.Job.status.in_([JobStatus.PENDING, JobStatus.PAUSED])
+    ).all()
+    
+    pending_jobs_orm.sort(key=_scheduler_sort_key, reverse=True)
+
+    # 显式手动转换为 Pydantic 模型，触发懒加载
+    running_jobs = [JobResponse.model_validate(job) for job in running_jobs_orm]
+    pending_jobs = [JobResponse.model_validate(job) for job in pending_jobs_orm]
+
+    # --- 资源计算 (Magnus 视角) ---
+    slurm_manager = SlurmManager()
+    
+    # n1: Slurm 系统级空闲
+    n1_free = slurm_manager.get_cluster_free_gpus()
+    
+    # n2: Magnus 平台正在使用的 GPU (累加 Running 任务的 gpu_count)
+    n2_used = sum(job.gpu_count for job in running_jobs_orm)
+    
+    # 动态总算力 = 当前 Magnus 用掉的 + 剩余还能抢的
+    display_total = n1_free + n2_used
+
+    return {
+        "resources": {
+            "node": "liustation",
+            "gpu_model": "RTX 5090",
+            "total": display_total,
+            "free": n1_free,
+            "used": n2_used,
+        },
+        "running_jobs": running_jobs,
+        "pending_jobs": pending_jobs,
+    }
+
+
+@router.get("/dashboard/my-active-jobs", response_model=List[JobResponse])
+async def get_my_active_jobs(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    Dashboard 专用：获取当前用户“活跃”的任务
+    逻辑：Running 在顶端(按开始时间)，Pending/Paused 在下方(按调度优先级)
+    """
+    
+    # 1. 获取 Running 任务
+    running_orm = db.query(models.Job).filter(
+        models.Job.user_id == current_user.id,
+        models.Job.status == JobStatus.RUNNING
+    ).order_by(models.Job.start_time.desc()).all()
+    
+    # 2. 获取排队任务
+    queued_orm = db.query(models.Job).filter(
+        models.Job.user_id == current_user.id,
+        models.Job.status.in_([JobStatus.PENDING, JobStatus.PAUSED])
+    ).all()
+    
+    # 3. 对排队任务应用调度排序
+    queued_orm.sort(key=_scheduler_sort_key, reverse=True)
+    
+    # 4. 合并并强制序列化 (User 懒加载)
+    all_jobs_orm = running_orm + queued_orm
+    
+    return [JobResponse.model_validate(job) for job in all_jobs_orm]
+
+
 # ================= Auth Routes =================
+
 
 @router.post(
     "/auth/feishu/login",
@@ -246,6 +362,7 @@ async def feishu_login(
         "token_type": "bearer",
         "user": db_user,
     }
+
 
 @router.get(
     "/users",

@@ -1,5 +1,5 @@
 // front_end/src/components/jobs/job-status-badge.tsx
-import { Play, CheckCircle2, AlertCircle, PauseCircle, Clock } from "lucide-react";
+import { Play, CheckCircle2, AlertCircle, PauseCircle, Clock, Ban } from "lucide-react";
 
 interface JobStatusBadgeProps {
   status: string;
@@ -10,11 +10,13 @@ interface JobStatusBadgeProps {
 export function JobStatusBadge({ status, size = "sm", animate = true }: JobStatusBadgeProps) {
   // 统一状态逻辑
   const config = {
-    Running: { color: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/20", icon: Play },
-    Success: { color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/20", icon: CheckCircle2 },
-    Failed:  { color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/20", icon: AlertCircle },
-    Paused:  { color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/20", icon: PauseCircle },
-    Pending: { color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/20", icon: Clock },
+    Running:    { color: "text-blue-400", bg: "bg-blue-500/10", border: "border-blue-500/20", icon: Play },
+    Success:    { color: "text-green-400", bg: "bg-green-500/10", border: "border-green-500/20", icon: CheckCircle2 },
+    Failed:     { color: "text-red-400", bg: "bg-red-500/10", border: "border-red-500/20", icon: AlertCircle },
+    Paused:     { color: "text-orange-400", bg: "bg-orange-500/10", border: "border-orange-500/20", icon: PauseCircle },
+    Pending:    { color: "text-yellow-400", bg: "bg-yellow-500/10", border: "border-yellow-500/20", icon: Clock },
+    Terminated: { color: "text-zinc-400", bg: "bg-zinc-500/10", border: "border-zinc-500/20", icon: Ban },
+  // @ts-ignore
   }[status] || { color: "text-zinc-400", bg: "bg-zinc-800", border: "border-zinc-700", icon: Clock };
 
   const Icon = config.icon;

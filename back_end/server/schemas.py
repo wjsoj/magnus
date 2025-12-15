@@ -12,6 +12,7 @@ __all__ = [
     "FeishuLoginRequest",
     "UserInfo",
     "LoginResponse",
+    "ClusterStatsResponse",
 ]
 
 
@@ -60,3 +61,18 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserInfo
+    
+    
+class ClusterResources(BaseModel):
+    node: str
+    gpu_model: str
+    total: int
+    free: int
+    used: int
+    class Config: from_attributes = True
+
+class ClusterStatsResponse(BaseModel):
+    resources: ClusterResources
+    running_jobs: List[JobResponse]
+    pending_jobs: List[JobResponse]
+    class Config: from_attributes = True

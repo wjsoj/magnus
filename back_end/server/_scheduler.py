@@ -364,6 +364,32 @@ if __name__ == "__main__":
         db.commit()
         
         
+    def terminate_job(
+        self,
+        db: Session,
+        job: Job,
+    ) -> None:
+        """
+        供 API 调用的主动终止接口
+        动作：Kill Slurm -> 清理工作区 -> 标记 TERMINATED
+        """
+        if not self.enabled:
+            logger.warning("Scheduler disabled, skipping termination logic.")
+            return
+
+        if job.slurm_job_id:
+            logger.info(f"Terminating job {job.id} (SLURM: {job.slurm_job_id}) by user request.")
+            self.slurm_manager.kill_job(job.slurm_job_id)
+
+        self._clean_up_working_table(job.id)
+        
+        job.status = JobStatus.TERMINATED
+        job.slurm_job_id = None
+        job.start_time = None 
+        
+        db.commit()
+        
+        
     def _clean_up_working_table(
         self,
         job_id: str,

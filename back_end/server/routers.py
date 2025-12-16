@@ -2,6 +2,7 @@
 import os
 import jwt
 import logging
+import asyncio
 from typing import List, Optional
 from datetime import datetime
 
@@ -19,6 +20,7 @@ from ._github_client import github_client
 from ._jwt_signer import jwt_signer
 from ._feishu_client import feishu_client
 from ._magnus_config import magnus_config
+from ._scheduler import scheduler
 
 
 __all__ = [
@@ -203,9 +205,7 @@ async def terminate_job(
 ):
     """
     用户主动终止任务。
-    动作：
-    1. 调用 squeue/scancel 杀掉 Slurm 进程
-    2. 将数据库状态置为 TERMINATED
+    调用 Scheduler 的 terminate_job 方法以确保资源清理和状态更新的一致性。
     """
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
     if not job:
@@ -214,15 +214,15 @@ async def terminate_job(
     if job.user_id != current_user.id:
          raise HTTPException(status_code=403, detail="Not authorized to terminate this job")
 
-    if job.slurm_job_id:
-        try:
-            manager = SlurmManager()
-            manager.kill_job(job.slurm_job_id)
-        except Exception as e:
-            logger.warning(f"Failed to kill Slurm job {job.slurm_job_id}: {e}")
+    try:
+        await asyncio.to_thread(
+            scheduler.terminate_job,
+            db, job,
+        )
+    except Exception as e:
+        logger.error(f"Error terminating job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to terminate job")
 
-    job.status = models.JobStatus.TERMINATED
-    db.commit()
     db.refresh(job)
     
     return {"message": "Job terminated", "status": job.status}

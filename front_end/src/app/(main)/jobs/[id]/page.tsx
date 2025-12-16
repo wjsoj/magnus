@@ -16,6 +16,30 @@ export default function JobDetailsPage() {
   const params = useParams();
   const router = useRouter();
   const jobId = params.id as string;
+
+  // --- 外部 slurm 任务无法浏览详情，在此拦截 ---
+  if (decodeURIComponent(jobId).endsWith("(slurm)")) {
+    return (
+      <div className="flex flex-col items-center justify-center h-[60vh] text-zinc-400 gap-6">
+        <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800 text-center max-w-md">
+          <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center mx-auto mb-4">
+             <Terminal className="w-6 h-6 text-zinc-500" />
+          </div>
+          <h2 className="text-xl font-bold text-zinc-200 mb-2">External Task</h2>
+          <p className="text-zinc-500 text-sm mb-6 leading-relaxed">
+            This task is managed directly by Slurm CLI outside of Magnus. <br/>
+            Detailed logs and configuration are not available here.
+          </p>
+          <button 
+            onClick={() => router.back()} 
+            className="px-6 py-2 bg-blue-600 text-white hover:bg-blue-500 text-sm font-medium rounded-lg transition-colors"
+          >
+            Go Back
+          </button>
+        </div>
+      </div>
+    );
+  }
   
   const [job, setJob] = useState<Job | null>(null);
   const [logs, setLogs] = useState<string>("");

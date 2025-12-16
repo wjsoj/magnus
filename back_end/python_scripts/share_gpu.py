@@ -1,173 +1,171 @@
-# back_end/python_scripts/share_gpu.py
+# back_end/python_scripts/share_gpu_direct.py
 
 import argparse
 import os
 import sys
-import socket
 import subprocess
-import shutil
-import tempfile
+import signal
 import time
+import glob
 from pathlib import Path
 from datetime import datetime
 
 def log(msg, level="INFO"):
-    """带时间戳并强制刷新的日志函数"""
     timestamp = datetime.now().strftime("%H:%M:%S")
-    icon = "[*]" if level == "INFO" else "[!]"
+    icon = "[+]" if level == "INFO" else "[!]"
+    if level == "ERROR": icon = "[x]"
     print(f"{icon} {timestamp} {msg}", flush=True)
 
-def get_free_port():
-    """获取一个空闲的随机端口"""
-    log("正在寻找空闲端口...")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
-        port = s.getsockname()[1]
-        log(f"获取到端口: {port}")
-        return port
+def run_cmd(cmd):
+    try:
+        subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except subprocess.CalledProcessError:
+        return False
 
-def get_target_user_pubkey(username):
-    log(f"开始寻找用户 '{username}' 的 SSH 公钥...")
+def get_physical_gpus():
+    """
+    自省：探测当前上下文中应该分享哪些 GPU。
+    策略优先级：
+    1. SLURM_JOB_GPUS (如果在 Slurm Job 内，这是最准确的物理 ID)
+    2. CUDA_VISIBLE_DEVICES (如果有环境变量限制)
+    3. 物理扫描 /dev/nvidia[0-9]* (如果是在裸机或容器内独占)
+    """
+    gpus = set()
+
+    # 策略 1: 检查 Slurm 环境变量 (最推荐)
+    slurm_gpus = os.getenv("SLURM_JOB_GPUS")
+    if slurm_gpus:
+        log(f"检测到 Slurm 环境，分配 ID: {slurm_gpus}")
+        # 处理 slurm 格式，如 "0,1" 或 "0-3"
+        # 简单处理逗号和单数字，复杂范围需额外解析
+        for part in slurm_gpus.split(','):
+            if '-' in part: # 处理 0-3 这种情况
+                try:
+                    start, end = map(int, part.split('-'))
+                    for i in range(start, end + 1):
+                        gpus.add(str(i))
+                except:
+                    pass
+            else:
+                gpus.add(part.strip())
+        return sorted(list(gpus))
+
+    # 策略 2: 检查 CUDA 变量
+    cuda_gpus = os.getenv("CUDA_VISIBLE_DEVICES")
+    if cuda_gpus:
+        log(f"检测到 CUDA_VISIBLE_DEVICES: {cuda_gpus}")
+        # 注意：这里假设变量里的 ID 是物理 ID。
+        # 在某些容器化场景下这可能是逻辑 ID，但在裸机上通常对应物理 ID。
+        if cuda_gpus.lower() == "all":
+            # 如果是 all，落入策略 3
+            pass
+        elif cuda_gpus.lower() == "none":
+            return []
+        else:
+            for part in cuda_gpus.split(','):
+                gpus.add(part.strip())
+            return sorted(list(gpus))
+
+    # 策略 3: 暴力扫描 (兜底)
+    # 扫描 /dev/nvidiaX，排除 nvidiactl 等控制设备
+    log("未检测到环境约束，扫描所有物理设备...")
+    devices = glob.glob("/dev/nvidia[0-9]*")
+    for dev in devices:
+        # 提取数字 ID /dev/nvidia0 -> 0
+        dev_name = os.path.basename(dev)
+        dev_id = dev_name.replace("nvidia", "")
+        if dev_id.isdigit():
+            gpus.add(dev_id)
     
-    # 搜索路径顺序：先找 RSA，再找 ED25519
-    possible_paths = [
-        Path(f"/home/{username}/.ssh/id_rsa.pub"),
-        Path(f"/home/{username}/.ssh/id_ed25519.pub"),
-        Path(f"/data/{username}/.ssh/id_rsa.pub"),
-        Path(f"/users/{username}/.ssh/id_rsa.pub"),
-        Path(f"/home/{username}/.ssh/authorized_keys"),
-    ]
+    return sorted(list(gpus))
+
+def set_gpu_acl(username, gpu_ids, action="grant"):
+    """
+    修改 ACL 权限
+    action: 'grant' (rw) | 'revoke' (remove)
+    """
+    if not gpu_ids:
+        log("没有探测到可用的 GPU，跳过 ACL 操作。", "WARN")
+        return
+
+    # 必须包含的基础控制设备 (否则 CUDA 初始化可能会挂)
+    # 通常这些默认是对所有人可读写的，但为了保险起见，也可以加进去
+    ctrl_devices = ["/dev/nvidiactl", "/dev/nvidia-uvm"]
     
-    for p in possible_paths:
-        log(f"  -> 检查路径: {p}")
-        if p.exists():
-            log(f"  -> 成功找到公钥: {p}")
-            try:
-                # 只读取第一行
-                content = p.read_text().strip().split('\n')[0]
-                return content
-            except Exception as e:
-                log(f"读取公钥文件失败: {e}", "ERROR")
+    target_devices = []
+    # 添加具体的 GPU 设备
+    for gid in gpu_ids:
+        path = f"/dev/nvidia{gid}"
+        if os.path.exists(path):
+            target_devices.append(path)
     
-    log(f"错误: 在上述路径均未找到用户 '{username}' 的公钥", "ERROR")
-    return None
+    # 执行 setfacl
+    mode = "-m" if action == "grant" else "-x"
+    perms = f"u:{username}:rw" if action == "grant" else f"u:{username}"
+    
+    op_name = "授权" if action == "grant" else "回收"
+    log(f"正在执行 {op_name}操作 (用户: {username})...")
+
+    for dev in target_devices:
+        cmd = ["setfacl", mode, perms, dev]
+        if run_cmd(cmd):
+            log(f" -> {dev} : 成功")
+        else:
+            log(f" -> {dev} : 失败 (权限不足或文件不存在)", "ERROR")
+            
+    # 对控制设备也做一次确保 (可选，根据你的安全策略决定是否放开)
+    # for dev in ctrl_devices:
+    #    if os.path.exists(dev):
+    #        run_cmd(["setfacl", mode, perms, dev])
 
 def main():
-    parser = argparse.ArgumentParser(description="Magnus GPU Sharing (User-Level SSHD)")
-    parser.add_argument("username", type=str, help="接收 GPU 权限的目标用户名")
+    parser = argparse.ArgumentParser(description="Magnus Direct GPU Share")
+    parser.add_argument("username", type=str, help="接收权限的用户名")
     args = parser.parse_args()
-    target_user = args.username
+    username = args.username
 
-    process = None
-    work_dir = None
+    # 1. 权限自检
+    if os.geteuid() != 0:
+        log("错误: 必须以 ROOT 身份运行此脚本 (用于修改 ACL)", "ERROR")
+        sys.exit(1)
 
-    log(f"启动 GPU 共享脚本 (Process ID: {os.getpid()})")
-    log(f"当前运行用户: {os.getenv('USER')}")
+    # 2. 探测 GPU
+    gpu_ids = get_physical_gpus()
+    if not gpu_ids:
+        log("未探测到任何 GPU 设备！退出。", "ERROR")
+        sys.exit(1)
+        
+    log(f"探测到可用 GPU 物理 ID: {gpu_ids}")
 
+    # 3. 注册退出信号 (确保 Ctrl+C 或被 kill 时能撤销权限)
+    def shutdown(signum, frame):
+        print("\n", flush=True)
+        log("收到停止信号，正在回滚权限...")
+        set_gpu_acl(username, gpu_ids, action="revoke")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    # 4. 授予权限
     try:
-        # 1. 检查 SSHD
-        sshd_path = shutil.which("sshd") or "/usr/sbin/sshd"
-        if not os.path.exists(sshd_path):
-            log("错误: 未找到 sshd 程序", "ERROR")
-            sys.exit(1)
-
-        # 2. 获取公钥
-        pubkey = get_target_user_pubkey(target_user)
-        if not pubkey:
-            log("无法继续: 未找到目标用户公钥", "ERROR")
-            sys.exit(1)
-
-        # 3. 创建临时目录
-        work_dir = tempfile.mkdtemp(prefix="magnus_sshd_")
-        work_path = Path(work_dir)
-        log(f"创建临时运行环境: {work_path}")
-
-        # 4. 生成 Host Key
-        host_key_path = work_path / "ssh_host_rsa_key"
-        subprocess.check_call(
-            ["ssh-keygen", "-t", "rsa", "-f", str(host_key_path), "-N", "", "-q"],
-            stdout=sys.stdout, stderr=sys.stderr
-        )
-
-        # 5. 配置 authorized_keys
-        auth_keys_path = work_path / "authorized_keys"
-        auth_keys_path.write_text(pubkey)
-        auth_keys_path.chmod(0o600)
-        log("已配置 authorized_keys")
-
-        # 6. 配置 SSHD (关键修改: StrictModes no)
-        port = get_free_port()
-        pid_file = work_path / "sshd.pid"
+        set_gpu_acl(username, gpu_ids, action="grant")
         
-        sshd_config = f"""
-        Port {port}
-        HostKey {host_key_path}
-        AuthorizedKeysFile {auth_keys_path}
-        PidFile {pid_file}
-        PermitRootLogin no
-        PasswordAuthentication no
-        ChallengeResponseAuthentication no
-        UsePAM no
-        X11Forwarding yes
-        PrintMotd no
-        LogLevel DEBUG1
-        StrictModes no
-        ClientAliveInterval 60
-        ClientAliveCountMax 3
-        """
-        
-        config_path = work_path / "sshd_config"
-        config_path.write_text(sshd_config)
-
-        # 7. 启动 SSHD
-        log(f"正在尝试启动 sshd (端口 {port})...")
-        process = subprocess.Popen(
-            [sshd_path, "-f", str(config_path), "-D", "-e"], 
-            stderr=sys.stderr,
-            stdout=sys.stdout
-        )
-        
-        time.sleep(2)
-        if process.poll() is not None:
-            log(f"错误: sshd 启动失败，返回码: {process.returncode}", "ERROR")
-            sys.exit(1)
-
-        # 8. 获取连接信息
-        hostname = os.uname().nodename
-        try:
-            ip = socket.gethostbyname(hostname)
-        except:
-            ip = hostname
-        current_user = os.getenv("USER")
-        
-        print("\n" + "="*60, flush=True)
-        print(f"🎉 隧道建立成功！GPU 环境已共享给 {target_user}", flush=True)
         print("="*60, flush=True)
-        print("请把下面这行命令发给你的师兄/同学：\n", flush=True)
-        # 提示用户如果有多把钥匙，可能需要指定 -i
-        print(f"   ssh -p {port} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no {current_user}@{ip}", flush=True)
-        print("\n   (如果报错 Permission denied，请尝试加上 -i ~/.ssh/id_rsa 指定私钥)", flush=True)
+        print(f"🎉 GPU 共享已生效")
+        print(f"   用户: {username}")
+        print(f"   设备: {['/dev/nvidia'+i for i in gpu_ids]}")
+        print("   状态: 进程守护中... (进程结束将自动回收权限)")
         print("="*60, flush=True)
-        
-        # 9. 保活
+
+        # 5. 守护进程 (Blocking)
         while True:
-            if process.poll() is not None:
-                log(f"警告: sshd 进程意外退出", "ERROR")
-                break
             time.sleep(10)
 
-    except KeyboardInterrupt:
-        log("收到停止信号...")
     except Exception as e:
-        log(f"发生未捕获异常: {e}", "ERROR")
-    finally:
-        if process and process.poll() is None:
-            process.terminate()
-        if work_dir and os.path.exists(work_dir):
-            try:
-                shutil.rmtree(work_dir)
-            except:
-                pass
+        log(f"运行时发生异常: {e}", "ERROR")
+        set_gpu_acl(username, gpu_ids, action="revoke")
 
 if __name__ == "__main__":
     main()

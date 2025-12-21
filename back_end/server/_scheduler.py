@@ -194,9 +194,13 @@ class MagnusScheduler:
                     Job.job_type.in_([JobType.B1, JobType.B2])
                 ).all()
                 
-                # 优先杀晚启动的 (LIFO)
+                # 优先杀 B2，同优先级先杀晚启动的 (LIFO)
+                kill_priority = {JobType.B2: 1, JobType.B1: 0}
                 potential_victims.sort(
-                    key = lambda x: x.start_time.timestamp() if x.start_time else 0, 
+                    key = lambda x: (
+                        kill_priority.get(x.job_type, 0),
+                        x.start_time.timestamp() if x.start_time else 0
+                    ), 
                     reverse = True,
                 )
                 

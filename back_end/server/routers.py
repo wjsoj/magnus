@@ -21,6 +21,7 @@ from ._jwt_signer import jwt_signer
 from ._feishu_client import feishu_client
 from ._magnus_config import magnus_config
 from ._scheduler import scheduler
+from ._slurm_manager import SlurmManager
 
 
 __all__ = [

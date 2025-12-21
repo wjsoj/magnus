@@ -1,4 +1,4 @@
-# back_end/library/functional/_slurm_manager.py
+# back_end/server/_slurm_manager.py
 import json
 import time
 import shutil
@@ -127,6 +127,7 @@ class SlurmManager:
         output_path: Optional[str] = None,
         slurm_latency: int = 1,
         overwrite_output: bool = True,
+        user: Optional[str] = None,
     ) -> str:
         
         """
@@ -162,6 +163,9 @@ class SlurmManager:
                 command.append(f"--gres=gpu:{gpu_type}:{gpus}")
             else:
                 command.append(f"--gres=gpu:{gpus}")
+                
+        if user is not None:
+            command.append(f"--uid={user}")
 
         job_id = None
         
@@ -186,9 +190,36 @@ class SlurmManager:
             
             # 模拟 Immediate 模式的核心逻辑
             if status == "PENDING":
-                logger.warning(f"⚠️ Job {job_id} is PENDING (Resource unavailable). Triggering Immediate Kill...")
+                detailed_reason = "Unknown Reason"
+                partition_info = "Unknown Partition"
+                try:
+                    info_cmd = [
+                        "squeue", 
+                        "--job", str(job_id), 
+                        "--noheader", 
+                        "--format=%r|%P"
+                    ]
+                    output = subprocess.check_output(
+                        info_cmd, 
+                        text=True, 
+                        stderr=subprocess.DEVNULL
+                    ).strip()
+                    
+                    if output:
+                        detailed_reason, partition_info = output.split("|", 1)
+                except Exception:
+                    pass
+                
+                logger.warning(
+                    f"⚠️ [Immediate Mode] Job {job_id} Rejected.\n"
+                    f"   - Status: PENDING\n"
+                    f"   - Reason: [{detailed_reason}] (Critically Important)\n"
+                    f"   - Partition: [{partition_info}]\n"
+                    f"   - Action: Killing job immediately due to strict resource policy."
+                )
+                
                 self.kill_job(job_id) 
-                raise SlurmResourceError("Resources unavailable immediately (Simulated)")
+                raise SlurmResourceError(f"Resources unavailable immediately (Slurm Reason: {detailed_reason})")
             
             elif status in ["FAILED", "UNKNOWN", "BOOT_FAIL", "NODE_FAIL"]:
                 raise SlurmError(f"Job failed immediately after submission (Status: {status})")

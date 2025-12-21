@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from pywheels.file_tools import guarantee_file_exist, delete_file
 from .database import SessionLocal
 from .models import Job, JobStatus, JobType, ClusterSnapshot
-from library.functional._slurm_manager import SlurmManager, SlurmResourceError
+from ._slurm_manager import SlurmManager, SlurmResourceError
 from ._magnus_config import magnus_config
 
 
@@ -234,6 +234,8 @@ class MagnusScheduler:
         使用 Python Wrapper 自动处理带认证的 Git Clone
         """
         
+        default_user = "magnus"
+        
         job_working_table = f"{magnus_workspace_path}/jobs/{job.id}"
         guarantee_file_exist(f"{job_working_table}/slurm", is_directory=True)
         
@@ -314,6 +316,7 @@ def main():
         
         # 构造组合拳命令：source 脚本 -> 激活环境 -> 执行用户命令
         full_command = " && ".join([
+            f"export HOME=/home/{default_user}",
             f"source '{{conda_shell_script_path}}'",
             f"conda activate {{execution_conda_environment}}",
             "unset VIRTUAL_ENV",
@@ -366,6 +369,7 @@ if __name__ == "__main__":
                 output_path = f"{job_working_table}/slurm/output.txt",
                 slurm_latency = magnus_config["server"]["scheduler"]["slurm_latency"],
                 overwrite_output = False,
+                user = default_user,
             )
             
             job.status = JobStatus.RUNNING

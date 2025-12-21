@@ -46,10 +46,11 @@ Magnus-Platform/
 │   │   ├── models.py         # 数据库模型 (含枚举类型)
 │   │   ├── routers.py        # API 路由定义
 │   │   ├── schemas.py        # Pydantic 数据模型
+│   │   ├── _slurm_manager.py # slurm 接口
 │   │   └── main.py           # 应用入口 (含调度器后台任务)
 │   ├── library/              # 核心库模块
 │   │   ├── functional/       # 功能模块
-│   │   │   └── _slurm_manager.py  # SLURM集群管理器
+│   │   │   └── feishu_tools.py  # 飞书工具
 │   │   └── fundamental/      # 基础工具模块
 │   ├── python_scripts/      # 脚本目录
 │   │   └── tests/           # 测试工具

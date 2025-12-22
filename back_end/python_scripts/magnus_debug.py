@@ -3,7 +3,7 @@ import sys
 import time
 import signal
 import datetime
-from math import isinf
+from math import isinf, ceil
 
 # === Configuration ===
 HEARTBEAT_INTERVAL_NORMAL = 300  # Normal: 5 Minutes
@@ -84,7 +84,7 @@ def main():
             in_warning_zone = True
             if not warned_termination:
                 print("-" * 60, flush=True)
-                print(f"[{timestamp}] {PREFIX} !!! WARNING: Session ending in less than {int(remaining/60)} minutes !!!", flush=True)
+                print(f"[{timestamp}] {PREFIX} !!! WARNING: Session ending in less than {ceil(remaining/60)} minutes !!!", flush=True)
                 print("-" * 60, flush=True)
                 warned_termination = True
 

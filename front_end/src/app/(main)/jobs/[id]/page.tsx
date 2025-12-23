@@ -15,19 +15,67 @@ import RenderMarkdown from "@/components/ui/render-markdown";
 import { JobDrawer } from "@/components/jobs/job-drawer";
 import { useJobOperations } from "@/hooks/use-job-operations";
 
-// --- 定义后端返回的 GPU 指标类型 ---
-interface GpuMetric {
-  index: number;
-  utilization: number;
-}
-
 export default function JobDetailsPage() {
+  
   const params = useParams();
   const router = useRouter();
   const jobId = params.id as string;
+  const isSlurmTask = decodeURIComponent(jobId).endsWith("(slurm)");
 
-  // --- 外部 slurm 任务无法浏览详情，在此拦截 ---
-  if (decodeURIComponent(jobId).endsWith("(slurm)")) {
+  const [job, setJob] = useState<Job | null>(null);
+  const [logs, setLogs] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'console' | 'description' | 'metrics'>('console');
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  const { drawerProps, handleCloneJob } = useJobOperations({
+    onSuccess: () => router.push('/jobs')
+  });
+  
+  useEffect(() => {
+    
+    if (isSlurmTask) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchJob = async (isBackground = false) => {
+      if (!isBackground) setLoading(true);
+      try {
+        const data = await client(`/api/jobs/${jobId}`);
+        setJob(data);
+      } catch (e) {
+        console.error("Failed to fetch job", e);
+      } finally {
+        if (!isBackground) setLoading(false);
+      }
+    };
+
+    fetchJob();
+    const interval = setInterval(() => fetchJob(true), POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [jobId, isSlurmTask]);
+
+  useEffect(() => {
+    if (isSlurmTask) return;
+
+    const fetchLogs = async () => {
+      try {
+        const res = await client(`/api/jobs/${jobId}/logs`);
+        const logContent = typeof res === 'string' ? res : (res.logs || res.content || "");
+        setLogs(logContent);
+      } catch (e) {
+        // 忽略错误
+      }
+    };
+
+    fetchLogs();
+    const interval = setInterval(fetchLogs, POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [jobId, isSlurmTask]);
+
+  // 外部 Slurm 任务拦截 UI
+  if (isSlurmTask) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] text-zinc-400 gap-6">
         <div className="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-800 text-center max-w-md">
@@ -49,73 +97,6 @@ export default function JobDetailsPage() {
       </div>
     );
   }
-  
-  const [job, setJob] = useState<Job | null>(null);
-  const [logs, setLogs] = useState<string>("");
-  const [gpuMetrics, setGpuMetrics] = useState<GpuMetric[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'console' | 'description' | 'metrics'>('console');
-  const logEndRef = useRef<HTMLDivElement>(null);
-
-  // --- Hook 注入: 仅需处理 Clone 逻辑 ---
-  const { drawerProps, handleCloneJob } = useJobOperations({
-    onSuccess: () => router.push('/jobs') // Clone 成功后返回列表页
-  });
-
-  // 1. 获取任务详情 (支持轮询)
-  useEffect(() => {
-    const fetchJob = async (isBackground = false) => {
-      if (!isBackground) setLoading(true);
-      try {
-        const data = await client(`/api/jobs/${jobId}`);
-        setJob(data);
-      } catch (e) {
-        console.error("Failed to fetch job", e);
-      } finally {
-        if (!isBackground) setLoading(false);
-      }
-    };
-
-    fetchJob();
-    const interval = setInterval(() => fetchJob(true), POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [jobId]);
-
-  // 2. 轮询日志
-  useEffect(() => {
-    const fetchLogs = async () => {
-      try {
-        const res = await client(`/api/jobs/${jobId}/logs`);
-        const logContent = typeof res === 'string' ? res : (res.logs || res.content || "");
-        setLogs(logContent);
-      } catch (e) {
-        // 忽略错误
-      }
-    };
-
-    fetchLogs();
-    const interval = setInterval(fetchLogs, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [jobId]);
-
-  // 3. 轮询 GPU 指标 (仅在切换到指标页且任务运行时)
-  useEffect(() => {
-    if (activeTab !== 'metrics' || !job || job.status !== 'Running') return;
-
-    const fetchMetrics = async () => {
-      try {
-        const data = await client(`/api/jobs/${jobId}/metrics`);
-        // 预期后端返回结构: GpuMetric[]
-        setGpuMetrics(Array.isArray(data) ? data : (data.gpus || []));
-      } catch (e) {
-        // 忽略错误
-      }
-    };
-
-    fetchMetrics();
-    const interval = setInterval(fetchMetrics, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [jobId, activeTab, job?.status]);
 
   if (loading) {
     return <div className="flex items-center justify-center h-[50vh] text-zinc-500">Loading Job Context...</div>;
@@ -424,41 +405,17 @@ export default function JobDetailsPage() {
             )}
 
             {activeTab === 'metrics' && (
-              <div className="space-y-6 max-w-2xl mx-auto py-4">
-                {job.gpu_type !== 'CPU' ? (
-                  gpuMetrics.length > 0 ? (
-                    gpuMetrics.map((gpu) => (
-                      <div key={gpu.index} className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-6">
-                        <div className="flex justify-between items-end mb-4">
-                          <div className="flex items-center gap-3">
-                            <Cpu className="w-4 h-4 text-zinc-500" />
-                            <span className="text-sm font-bold text-zinc-200">GPU {gpu.index}</span>
-                          </div>
-                          <span className={`font-mono text-2xl font-bold tracking-tight ${gpu.utilization > 80 ? 'text-orange-400' : 'text-blue-400'}`}>
-                            {gpu.utilization}%
-                          </span>
-                        </div>
-                        <div className="h-2.5 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800/50 relative">
-                          <div 
-                            className={`h-full transition-all duration-700 ease-out shadow-[0_0_15px_rgba(59,130,246,0.3)]
-                              ${gpu.utilization > 80 ? 'bg-orange-500' : 'bg-blue-600'}`}
-                            style={{ width: `${gpu.utilization}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center text-zinc-600 gap-3 min-h-[300px]">
-                      <Activity className="w-8 h-8 opacity-20" />
-                      <p className="text-sm">Collecting performance metrics...</p>
-                    </div>
-                  )
-                ) : (
-                  <div className="h-full flex flex-col items-center justify-center text-zinc-600 gap-3 min-h-[300px] italic">
-                    <Cpu className="w-8 h-8 opacity-20" />
-                    Metrics only available for GPU tasks.
+              <div className="h-full flex flex-col items-center justify-center text-zinc-500 gap-4 min-h-[400px]">
+                <div className="relative">
+                  <Activity className="w-12 h-12 opacity-20" />
+                  <div className="absolute -bottom-1 -right-1 bg-amber-500/20 text-amber-500 p-1 rounded-full">
+                    <RefreshCw className="w-4 h-4 animate-spin-slow" />
                   </div>
-                )}
+                </div>
+                <div className="text-center">
+                  <p className="text-zinc-200 font-bold text-lg mb-1">Coming Soon</p>
+                  <p className="text-zinc-500 text-sm">施工中...</p>
+                </div>
               </div>
             )}
           </div>

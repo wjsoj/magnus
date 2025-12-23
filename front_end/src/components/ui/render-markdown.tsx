@@ -11,7 +11,9 @@ import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import remarkParse from "remark-parse";
 import rehypeStringify from "rehype-stringify";
+// @ts-ignore
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+// @ts-ignore
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { cn } from "@/lib/utils";
 import { CopyableText } from "@/components/ui/copyable-text";
@@ -86,6 +88,7 @@ export default function RenderMarkdown({ content }: { content: string }) {
       />
     ),
     img: ({ className, ...props }: any) => (
+      // eslint-disable-next-line @next/next/no-img-element
       <img className={cn("rounded-md border border-zinc-800 bg-zinc-950", className)} {...props} alt="" />
     ),
     hr: ({ ...props }) => (
@@ -156,11 +159,12 @@ export default function RenderMarkdown({ content }: { content: string }) {
           <SyntaxHighlighter
             {...rest}
             PreTag="div"
-            children={codeString}
             language={match[1]}
             style={vscDarkPlus}
             customStyle={{ margin: 0, borderRadius: 0, padding: '1rem', background: '#09090b' }} 
-          />
+          >
+            {codeString}
+          </SyntaxHighlighter>
         </div>
       ) : (
         <code {...rest} className={cn("bg-zinc-800/50 px-1.5 py-0.5 rounded text-zinc-200 font-mono text-xs border border-zinc-700/50", className)}>

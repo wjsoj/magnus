@@ -6,7 +6,7 @@ import asyncio
 from typing import List, Optional
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -555,3 +555,84 @@ async def get_users(
 ):
     users = db.query(models.User).order_by(models.User.name).all()
     return users
+
+
+# ================= Blueprint Routes =================
+
+def _impl_magnus_debug(
+    current_user: models.User, 
+    params: dict
+)-> models.Job:
+    """
+    Magnus Debug 蓝图的具体实现逻辑。
+    将业务入参转换为标准的 Job 定义。
+    """
+    
+    user_name = params["user_name"]
+    gpu_count = int(params.get("gpu_count", 1))
+    timeout = params.get("timeout", "60").lower()
+
+    entry_command = f"""cd back_end/python_scripts
+python magnus_debug.py{f' {int(timeout)}' if timeout != 'infinity' else ''}
+"""
+    
+    return models.Job(
+        task_name = f"Magnus Debug",
+        description = f"""## Magnus 占卡调试任务
+- 使用人：{user_name}
+- GPU数量：{gpu_count}
+- 使用时长：{'无限' if timeout == 'infinity' else f'{int(timeout)}分钟'}
+- 使用方式：
+
+```bash
+magnus-connect
+```
+""",
+        namespace = "PKU-Plasma",
+        repo_name = "magnus",
+        branch = "main",
+        commit_sha = "HEAD",
+        entry_command = entry_command,
+        gpu_count = gpu_count,
+        gpu_type = "rtx5090",      # 写死用 5090
+        job_type = models.JobType.A2,
+        user_id = current_user.id,
+        status = models.JobStatus.PENDING,
+        runner = user_name,
+    )
+
+
+@router.get("/blueprints/{blueprint_id}/run")
+async def run_blueprint(
+    blueprint_id: str,
+    req: Request,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """
+    运行蓝图入口。
+    MVP 阶段通过 blueprint_id 手动分发到对应的实现函数。
+    """
+    params = dict(req.query_params)
+    logger.info(f"User {current_user.name} running blueprint {blueprint_id} with params: {params}")
+
+    # 1. 寻找蓝图实现
+    if blueprint_id == "magnus-debug":
+        # 统一指向 debug 实现
+        db_job = _impl_magnus_debug(current_user, params)
+    else:
+        raise HTTPException(status_code=404, detail=f"Blueprint implementation '{blueprint_id}' not found")
+
+    # 2. 写入数据库
+    try:
+        db.add(db_job)
+        db.commit()
+        db.refresh(db_job)
+        
+        logger.info(f"Blueprint {blueprint_id} converted to Job {db_job.id}")
+        return {"message": "Blueprint launched successfully", "job_id": db_job.id}
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to launch blueprint {blueprint_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal error during blueprint execution")

@@ -123,12 +123,7 @@ export default function RenderMarkdown({ content }: { content: string }) {
         {...props}
       />
     ),
-    pre: ({ className, ...props }: any) => (
-      <pre
-        className={cn("mb-4 mt-4 overflow-x-auto rounded-lg py-2 bg-zinc-950 border border-zinc-800", className)}
-        {...props}
-      />
-    ),
+    pre: ({ children }: any) => <div className="not-prose">{children}</div>,
     a: ({ className, ...props }: any) => (
       <a
         className={cn(

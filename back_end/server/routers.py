@@ -175,8 +175,11 @@ async def get_job_logs(
 ):
     """
     获取任务实时日志。
-    直接读取文件系统中 Slurm 生成的 output.txt，而非查库。
+    为了防止内存溢出，限制最大读取 1MB。
     """
+    # 1. 设定阈值：1MB
+    MAX_LOG_SIZE = 1 * 1024 * 1024
+
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -188,10 +191,23 @@ async def get_job_logs(
         return {"logs": "Waiting for output stream... (Job might be PENDING or Initializing)"}
 
     try:
-        # 使用 errors="replace" 防止二进制数据或编码错误导致 API 崩溃
-        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-        return {"logs": content}
+        file_size = os.path.getsize(log_path)
+
+        # 文件过大，只读最后 1MB
+        if file_size > MAX_LOG_SIZE:
+            with open(log_path, "rb") as f: # 使用二进制模式以便 seek
+                f.seek(-MAX_LOG_SIZE, os.SEEK_END) # 倒退 1MB
+                content_bytes = f.read()
+                # decode 时使用 ignore 或 replace，防止切割点刚好在中文多字节中间导致乱码
+                content = content_bytes.decode("utf-8", errors="replace") 
+                
+                header = f"[Magnus Warning] Log file is too large ({file_size/1024/1024:.2f}MB). Showing last 1MB only...\n\n"
+                return {"logs": header + content}
+        
+        # 情况 B: 文件较小，直接全读
+        else:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                return {"logs": f.read()}
         
     except Exception as e:
         logger.error(f"Error reading log file for {job_id}: {e}")

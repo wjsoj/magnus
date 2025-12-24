@@ -22,6 +22,7 @@ from ._feishu_client import feishu_client
 from ._magnus_config import magnus_config
 from ._scheduler import scheduler
 from ._slurm_manager import SlurmManager
+from ._blueprint_manager import blueprint_manager
 
 
 __all__ = [
@@ -559,80 +560,168 @@ async def get_users(
 
 # ================= Blueprint Routes =================
 
-def _impl_magnus_debug(
-    current_user: models.User, 
-    params: dict
-)-> models.Job:
-    """
-    Magnus Debug 蓝图的具体实现逻辑。
-    将业务入参转换为标准的 Job 定义。
-    """
-    
-    user_name = params["user_name"]
-    gpu_count = int(params.get("gpu_count", 1))
-    timeout = params.get("timeout", "60").lower()
+@router.post("/blueprints", response_model=BlueprintResponse)
+async def create_blueprint(
+    bp: BlueprintCreate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # 1. 验证代码签名
+    try:
+        blueprint_manager.analyze_signature(bp.code)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    entry_command = f"""cd back_end/python_scripts
-python magnus_debug.py{f' {int(timeout)}' if timeout != 'infinity' else ''}
-"""
+    # 2. 检查 ID 是否冲突（如果是新建）
+    # 注意：这里我们简化逻辑，允许 overwrite (Update)，
+    # 但如果是别人的蓝图，则不允许覆盖，抛出 403
     
-    return models.Job(
-        task_name = f"Magnus Debug",
-        description = f"""## Magnus 占卡调试任务
-- 使用人：{user_name}
-- GPU数量：{gpu_count}
-- 使用时长：{'无限' if timeout == 'infinity' else f'{int(timeout)}分钟'}
-- 使用方式：
+    existing = db.query(models.Blueprint).filter(models.Blueprint.id == bp.id).first()
+    
+    if existing:
+        if existing.user_id != current_user.id:
+            raise HTTPException(
+                status_code=403, 
+                detail="You cannot modify a blueprint created by another user. Please verify the Blueprint ID."
+            )
+        
+        # Update existing
+        existing.title = bp.title
+        existing.description = bp.description
+        existing.code = bp.code
+        existing.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
 
-```bash
-magnus-connect
-```
-""",
-        namespace = "PKU-Plasma",
-        repo_name = "magnus",
-        branch = "main",
-        commit_sha = "HEAD",
-        entry_command = entry_command,
-        gpu_count = gpu_count,
-        gpu_type = "rtx5090",      # 写死用 5090
-        job_type = models.JobType.A2,
-        user_id = current_user.id,
-        status = models.JobStatus.PENDING,
-        runner = user_name,
+    # Create new
+    db_bp = models.Blueprint(
+        **bp.model_dump(),
+        user_id=current_user.id
     )
+    db.add(db_bp)
+    db.commit()
+    db.refresh(db_bp)
+    return db_bp
 
 
-@router.get("/blueprints/{blueprint_id}/run")
-async def run_blueprint(
+@router.delete("/blueprints/{blueprint_id}")
+async def delete_blueprint(
     blueprint_id: str,
-    req: Request,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
 ):
     """
-    运行蓝图入口。
-    MVP 阶段通过 blueprint_id 手动分发到对应的实现函数。
+    删除蓝图。仅拥有者可操作。
     """
-    params = dict(req.query_params)
-    logger.info(f"User {current_user.name} running blueprint {blueprint_id} with params: {params}")
+    bp = db.query(models.Blueprint).filter(models.Blueprint.id == blueprint_id).first()
+    
+    if not bp:
+        raise HTTPException(status_code=404, detail="Blueprint not found")
+        
+    if bp.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have permission to delete this blueprint")
+        
+    db.delete(bp)
+    db.commit()
+    
+    return {"message": "Blueprint deleted successfully"}
 
-    # 1. 寻找蓝图实现
-    if blueprint_id == "magnus-debug":
-        # 统一指向 debug 实现
-        db_job = _impl_magnus_debug(current_user, params)
-    else:
-        raise HTTPException(status_code=404, detail=f"Blueprint implementation '{blueprint_id}' not found")
 
-    # 2. 写入数据库
+@router.get("/blueprints", response_model=PagedBlueprintResponse)
+async def list_blueprints(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    creator_id: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+):
+    """
+    获取蓝图列表（支持分页、搜索、筛选）
+    """
+    query = db.query(models.Blueprint)
+
+    # 1. 搜索逻辑 (Title, ID, Description)
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(
+            or_(
+                models.Blueprint.title.ilike(search_pattern),
+                models.Blueprint.id.ilike(search_pattern),
+                models.Blueprint.description.ilike(search_pattern)
+            )
+        )
+    
+    # 2. 用户筛选
+    if creator_id and creator_id != "all":
+        query = query.filter(models.Blueprint.user_id == creator_id)
+
+    # 3. 计算总数
+    total = query.count()
+
+    # 4. 分页查询
+    # 按更新时间倒序排列（最近更新的在前面）
+    items = query.order_by(models.Blueprint.updated_at.desc())\
+                 .offset(skip)\
+                 .limit(limit)\
+                 .all()
+
+    return {"total": total, "items": items}
+
+
+@router.get("/blueprints/{blueprint_id}/schema", response_model=List[BlueprintParamSchema])
+async def get_blueprint_schema(
+    blueprint_id: str,
+    db: Session = Depends(database.get_db),
+):
+    # ... (保持不变)
+    bp = db.query(models.Blueprint).filter(models.Blueprint.id == blueprint_id).first()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Blueprint not found")
+    
     try:
+        return blueprint_manager.analyze_signature(bp.code)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=f"Invalid blueprint code: {e}")
+
+
+@router.post("/blueprints/{blueprint_id}/run")
+async def run_blueprint(
+    blueprint_id: str,
+    params: Dict[str, Any],
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    # ... (保持不变)
+    bp = db.query(models.Blueprint).filter(models.Blueprint.id == blueprint_id).first()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Blueprint not found")
+
+    try:
+        job_submission = blueprint_manager.execute(
+            bp.code, 
+            params, 
+            context_user_name=current_user.name
+        )
+        
+        job_dict = job_submission.model_dump()
+        
+        # 强制修正一些字段
+        db_job = models.Job(
+            **job_dict,
+            user_id=current_user.id,
+            status=models.JobStatus.PENDING,
+            # 如果蓝图里没有指定 runner，默认用当前用户的名字(magnus 逻辑)
+            runner=job_dict.get("runner") 
+        )
+        
         db.add(db_job)
         db.commit()
         db.refresh(db_job)
         
-        logger.info(f"Blueprint {blueprint_id} converted to Job {db_job.id}")
-        return {"message": "Blueprint launched successfully", "job_id": db_job.id}
-        
+        logger.info(f"Blueprint {blueprint_id} launched job {db_job.id}")
+        return {"message": "Blueprint launched", "job_id": db_job.id}
+
     except Exception as e:
-        db.rollback()
-        logger.error(f"Failed to launch blueprint {blueprint_id}: {e}")
-        raise HTTPException(status_code=500, detail="Internal error during blueprint execution")
+        logger.error(f"Blueprint run failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))

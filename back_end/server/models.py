@@ -13,6 +13,7 @@ __all__ = [
     "JobStatus",
     "JobMetric",
     "ClusterSnapshot",
+    "Blueprint",
 ]
 
 
@@ -92,3 +93,14 @@ class ClusterSnapshot(Base):
     total_gpus: Mapped[int] = mapped_column(Integer)
     slurm_used_gpus: Mapped[int] = mapped_column(Integer)
     magnus_used_gpus: Mapped[int] = mapped_column(Integer)
+    
+    
+class Blueprint(Base):
+    __tablename__ = "blueprints"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    title: Mapped[str] = mapped_column(String)
+    description: Mapped[str] = mapped_column(String)
+    code: Mapped[str] = mapped_column(Text)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

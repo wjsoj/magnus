@@ -1,5 +1,5 @@
 # back_end/server/schemas.py
-from typing import List, Optional
+from typing import Any, List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 from .models import JobType, JobStatus
@@ -15,6 +15,10 @@ __all__ = [
     "LoginResponse",
     "ClusterStatsResponse",
     "DashboardJobsResponse",
+    "BlueprintCreate",
+    "BlueprintResponse",
+    "PagedBlueprintResponse",
+    "BlueprintParamSchema",
 ]
 
 
@@ -98,3 +102,37 @@ class ClusterStatsResponse(BaseModel):
 class DashboardJobsResponse(BaseModel):
     items: List[JobResponse]
     total: int
+    
+    
+class BlueprintCreate(BaseModel):
+    id: str
+    title: str
+    description: str
+    code: str
+
+
+class BlueprintResponse(BaseModel):
+    id: str
+    title: str
+    description: str
+    code: str
+    user_id: str
+    updated_at: datetime
+    user: Optional[UserInfo] = None 
+    class Config: from_attributes = True
+
+
+class PagedBlueprintResponse(BaseModel):
+    total: int
+    items: List[BlueprintResponse]
+
+
+class BlueprintParamSchema(BaseModel):
+    key: str
+    label: str
+    type: str 
+    default: Any = None
+    options: Optional[List[str]] = None
+    min: Optional[int] = None
+    max: Optional[int] = None
+    description: Optional[str] = None

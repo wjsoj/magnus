@@ -91,6 +91,51 @@ function BlueprintDrawer({ isOpen, mode, initialData, onClose, onSave, isSaving 
     const [formData, setFormData] = useState(initialData);
     const [errorField, setErrorField] = useState<string | null>(null);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        const target = e.currentTarget as HTMLTextAreaElement;
+        const { value, selectionStart, selectionEnd } = target;
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const newValue = value.substring(0, selectionStart) + "    " + value.substring(selectionEnd);
+            setFormData(prev => ({ ...prev, code: newValue }));
+            setTimeout(() => {
+                target.selectionStart = target.selectionEnd = selectionStart + 4;
+            }, 0);
+        }
+        if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+            e.preventDefault();
+            const lineStart = value.lastIndexOf('\n', selectionStart - 1) + 1;
+            let lineEnd = value.indexOf('\n', selectionStart);
+            if (lineEnd === -1) lineEnd = value.length;
+            const currentLine = value.substring(lineStart, lineEnd);
+            const isCommented = currentLine.trimStart().startsWith('#');
+            let newValue;
+            let newCursorPos = selectionStart;
+            if (isCommented) {
+                const match = currentLine.match(/^(\s*)# ?(.*)$/);
+                if (match) {
+                    const cleanLine = match[1] + match[2];
+                    newValue = value.substring(0, lineStart) + cleanLine + value.substring(lineEnd);
+                    newCursorPos = Math.max(lineStart, selectionStart - (currentLine.length - cleanLine.length));
+                } else {
+                    newValue = value; 
+                }
+            } else {
+                const match = currentLine.match(/^(\s*)(.*)$/);
+                const indent = match ? match[1] : "";
+                const content = match ? match[2] : currentLine;
+                const commentedLine = indent + "# " + content;
+                newValue = value.substring(0, lineStart) + commentedLine + value.substring(lineEnd);
+                newCursorPos = selectionStart + 2;
+            }
+
+            setFormData(prev => ({ ...prev, code: newValue }));
+            
+            setTimeout(() => {
+                target.selectionStart = target.selectionEnd = newCursorPos;
+            }, 0);
+        }
+    };
 
     useEffect(() => {
         if (isOpen) {
@@ -239,6 +284,7 @@ function BlueprintDrawer({ isOpen, mode, initialData, onClose, onSave, isSaving 
                                     onValueChange={code => setFormData({ ...formData, code })}
                                     highlight={code => highlight(code, languages.python, 'python')}
                                     padding={24}
+                                    onKeyDown={handleKeyDown}
                                     className="prism-editor font-mono text-sm leading-relaxed"
                                     style={{
                                         fontFamily: '"Fira Code", "Fira Mono", monospace',

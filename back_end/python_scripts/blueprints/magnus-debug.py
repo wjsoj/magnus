@@ -5,13 +5,13 @@ from typing import Annotated
 
 UserName = Annotated[str, {
     "label": "User Name",
-    "placeholder": "e.g. liuchang",
+    "placeholder": "enter your username on liustation2 here",
 }]
 
 GpuCount = Annotated[int, {
     "label": "GPU Count",
     "min": 1, 
-    "max": 8, 
+    "max": 3, 
 }]
 
 Timeout = Annotated[str, {

@@ -46,6 +46,7 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String, nullable=True)
     email: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    token: Mapped[str | None] = mapped_column(String, nullable=True)
     jobs: Mapped[list["Job"]] = relationship(back_populates="user")
 
 

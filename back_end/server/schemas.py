@@ -25,6 +25,7 @@ __all__ = [
 class UserInfo(BaseModel):
     id: str
     name: str
+    token: Optional[str] = None
     avatar_url: Optional[str] = None
     email: Optional[str] = None
     class Config: from_attributes = True

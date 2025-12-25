@@ -501,6 +501,7 @@ if __name__ == "__main__":
                 runner = effective_runner,
                 cpu_count = job.cpu_count,
                 memory_demand = job.memory_demand,
+                token = job.user.token if job.user.token is not None else "",
             )
             
             job.status = JobStatus.RUNNING
@@ -532,7 +533,11 @@ if __name__ == "__main__":
         """
         if job.slurm_job_id:
             logger.info(f"Killing victim job {job.id} (SLURM: {job.slurm_job_id})")
-            self.slurm_manager.kill_job(job.slurm_job_id)
+            self.slurm_manager.kill_job(
+                job.slurm_job_id,
+                runner = job.runner if job.runner is not None else "magnus",
+                token = job.user.token if job.user.token is not None else "",
+            )
             
         self._clean_up_working_table(job.id)
         
@@ -557,7 +562,11 @@ if __name__ == "__main__":
 
         if job.slurm_job_id:
             logger.info(f"Terminating job {job.id} (SLURM: {job.slurm_job_id}) by user request.")
-            self.slurm_manager.kill_job(job.slurm_job_id)
+            self.slurm_manager.kill_job(
+                job.slurm_job_id,
+                runner = job.runner if job.runner is not None else "magnus",
+                token = job.user.token if job.user.token is not None else "",
+            )
 
         self._clean_up_working_table(job.id)
         

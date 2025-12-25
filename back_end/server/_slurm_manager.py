@@ -1,4 +1,5 @@
 # back_end/server/_slurm_manager.py
+import os
 import json
 import time
 import shutil
@@ -6,7 +7,7 @@ import logging
 import traceback
 import subprocess
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 
 __all__ = [
@@ -123,13 +124,15 @@ class SlurmManager:
         entry_command: str, 
         gpus: int,
         job_name: str,
+        runner: str, 
+        token: str,
         gpu_type: Optional[str] = None,
         output_path: Optional[str] = None,
         slurm_latency: int = 1,
         overwrite_output: bool = True,
-        runner: Optional[str] = None, 
         cpu_count: Optional[int] = None,
         memory_demand: Optional[str] = None,
+        
     )-> str:
         
         """
@@ -168,11 +171,12 @@ class SlurmManager:
         
         if memory_demand is not None: command.append(f"--mem={memory_demand}") 
         if cpu_count is not None: command.append(f"--cpus-per-task={cpu_count}")
-        if runner is not None: 
-            command.append(f"--uid={runner}")
-            command.append(f"--gid={runner}")
 
         job_id = None
+        
+        env: Dict[str, str] = os.environ.copy()
+        if runner is not None: env["MAGNUS_RUNNER"] = runner
+        if token is not None: env["MAGNUS_TOKEN"] = token
         
         try:
             gpu_info = f"{gpu_type}:{gpus}" if (gpu_type and gpus > 0) else f"{gpus}"
@@ -183,7 +187,8 @@ class SlurmManager:
                 input = script_content,
                 capture_output = True, 
                 text = True, 
-                check = True
+                check = True,
+                env = env,
             )
             
             job_id = result.stdout.strip()
@@ -223,7 +228,7 @@ class SlurmManager:
                     f"   - Action: Killing job immediately due to strict resource policy."
                 )
                 
-                self.kill_job(job_id) 
+                self.kill_job(job_id, runner, token)
                 raise SlurmResourceError(f"Resources unavailable immediately (Slurm Reason: {detailed_reason})")
             
             elif status in ["FAILED", "UNKNOWN", "BOOT_FAIL", "NODE_FAIL"]:
@@ -243,7 +248,7 @@ class SlurmManager:
             if job_id:
                 logger.warning(f"🧹 Cleaning up job {job_id} due to unexpected error...")
                 try:
-                    self.kill_job(job_id)
+                    self.kill_job(job_id, runner, token)
                 except:
                     pass
             raise SlurmError(f"Unexpected error: {e}")
@@ -292,7 +297,9 @@ class SlurmManager:
 
     def kill_job(
         self, 
-        slurm_job_id: str
+        slurm_job_id: str,
+        runner: str,
+        token: str,
     ) -> None:
         
         command = [
@@ -300,8 +307,16 @@ class SlurmManager:
             slurm_job_id,
         ]
         
+        env: Dict[str, str] = os.environ.copy()
+        env["MAGNUS_RUNNER"] = runner
+        env["MAGNUS_TOKEN"] = token
+        
         try:
-            subprocess.run(command, check = False)
+            subprocess.run(
+                command,
+                check = False,
+                env = env,
+            )
         except Exception as error:
             logger.error(f"scancel failed for job {slurm_job_id}: {error}")
 

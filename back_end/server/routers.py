@@ -1,6 +1,7 @@
 # back_end/server/routers.py
 import os
 import jwt
+import secrets
 import logging
 import asyncio
 from typing import List, Optional
@@ -33,6 +34,10 @@ __all__ = [
 logger = logging.getLogger(__name__)
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/feishu/login")
+
+
+def generate_trust_token() -> str:
+    return f"sk-{secrets.token_urlsafe(24)}"
 
 
 async def get_current_user(
@@ -189,6 +194,14 @@ async def get_job_logs(
     log_path = f"{root_path}/workspace/jobs/{job_id}/slurm/output.txt"
 
     if not os.path.exists(log_path):
+        if job.status == JobStatus.FAILED:
+            effective_user = job.runner if job.runner is not None else "magnus"
+            return {
+                "logs": (
+                    "Job has failed for systematic reasons. "
+                    f"Please check if you have access to user {effective_user} on liustation2."
+                )
+            }
         return {"logs": "Waiting for output stream... (Job might be PENDING or Initializing)"}
 
     try:
@@ -526,15 +539,17 @@ async def feishu_login(
             feishu_open_id=open_id,
             name=feishu_user.get("name", "Unknown"),
             avatar_url=feishu_user.get("avatar_url"),
-            email=feishu_user.get("email")
+            email=feishu_user.get("email"),
+            token=generate_trust_token()
         )
         db.add(db_user)
         db.commit()
         db.refresh(db_user)
     else:
-        # 更新用户信息
         db_user.name = feishu_user.get("name", db_user.name)
         db_user.avatar_url = feishu_user.get("avatar_url", db_user.avatar_url)
+        if not db_user.token:
+            db_user.token = generate_trust_token()
         db.commit()
         db.refresh(db_user)
 
@@ -545,6 +560,25 @@ async def feishu_login(
         "token_type": "bearer",
         "user": db_user,
     }
+    
+    
+@router.post(
+    "/auth/token/refresh",
+    response_model=UserInfo,
+)
+async def refresh_trust_token(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    new_token = generate_trust_token()
+    current_user.token = new_token
+    
+    db.commit()
+    db.refresh(current_user)
+    
+    logger.info(f"User {current_user.id} ({current_user.name}) refreshed their trust token.")
+    
+    return current_user
 
 
 @router.get(

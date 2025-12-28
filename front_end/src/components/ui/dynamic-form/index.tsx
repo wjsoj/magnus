@@ -1,7 +1,9 @@
 // front_end/src/components/ui/dynamic-form/index.tsx
-import React from "react";
-import { Terminal, Loader2 } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { NumberStepper } from "@/components/ui/number-stepper";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { cn } from "@/lib/utils";
 import { FieldSchema } from "./types";
 
 interface DynamicFormProps {
@@ -12,6 +14,121 @@ interface DynamicFormProps {
   emptyMessage?: string;
 }
 
+function DynamicStringInput({ 
+  field, 
+  value, 
+  onChange 
+}: { 
+  field: FieldSchema; 
+  value: string; 
+  onChange: (val: string) => void;
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [isFocused, setIsFocused] = useState(false);
+
+  // 自动高度调整逻辑 (完美复刻 job-form)
+  useEffect(() => {
+    if (field.multi_line && textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+    }
+  }, [value, field.multi_line]);
+
+  const baseClasses = cn(
+    "w-full bg-zinc-950 border px-3 py-2.5 rounded-lg text-sm transition-all outline-none placeholder-zinc-700",
+    field.multi_line && "font-mono leading-relaxed resize-none overflow-hidden min-h-[42px]",
+    !field.border_color 
+      ? "border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20" 
+      : "border-zinc-800"
+  );
+
+  const dynamicStyle: React.CSSProperties = {
+    color: field.color,
+    ...(field.border_color && isFocused && {
+      borderColor: field.border_color,
+      boxShadow: `0 0 0 1px ${field.border_color}, 0 0 15px color-mix(in srgb, ${field.border_color}, transparent 80%)`
+    })
+  };
+
+  const commonProps = {
+    value,
+    onChange: (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) => onChange(e.target.value),
+    onFocus: () => setIsFocused(true),
+    onBlur: () => setIsFocused(false),
+    placeholder: field.placeholder,
+    className: baseClasses,
+    style: dynamicStyle,
+    spellCheck: false,
+  };
+
+  if (field.multi_line) {
+    return <textarea ref={textareaRef} rows={1} {...commonProps} />;
+  }
+
+  return <input type="text" {...commonProps} />;
+}
+
+function FormField({ 
+  field, 
+  value, 
+  onChange 
+}: { 
+  field: FieldSchema; 
+  value: any; 
+  onChange: (key: string, val: any) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-xs uppercase tracking-wider mb-1.5 block font-medium text-zinc-500">
+        {field.label || field.key}
+      </label>
+
+      {field.type === "number" ? (
+        <NumberStepper
+          label=""
+          value={Number(value)}
+          onChange={(val) => onChange(field.key, val)}
+          min={field.min}
+          max={field.max}
+        />
+      ) : field.type === "select" ? (
+        <SearchableSelect
+          value={String(value)}
+          onChange={(val) => onChange(field.key, val)}
+          options={(field.options || []).map(opt => ({
+            label: opt.label,
+            value: String(opt.value),
+            meta: opt.description 
+          }))}
+          placeholder={field.placeholder || "Select option..."}
+          className="mb-0"
+        />
+      ) : field.type === "boolean" ? (
+        <select
+          value={String(value)}
+          onChange={(e) => onChange(field.key, e.target.value === "true")}
+          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-all appearance-none"
+        >
+          <option value="true">True</option>
+          <option value="false">False</option>
+        </select>
+      ) : (
+        <DynamicStringInput 
+          field={field} 
+          value={value} 
+          onChange={(val) => onChange(field.key, val)} 
+        />
+      )}
+
+      {field.description && (
+        <p className="text-[11px] text-zinc-500 mt-1 ml-0.5">
+          {field.description}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function DynamicForm({
   schema,
   values,
@@ -19,7 +136,12 @@ export function DynamicForm({
   isLoading = false,
   emptyMessage = "No parameters required.",
 }: DynamicFormProps) {
-  
+  const [expandedScopes, setExpandedScopes] = useState<Record<string, boolean>>({});
+
+  const toggleScope = (scopeName: string) => {
+    setExpandedScopes(prev => ({ ...prev, [scopeName]: !prev[scopeName] }));
+  };
+
   if (isLoading) {
     return (
       <div className="py-10 flex justify-center">
@@ -32,70 +154,64 @@ export function DynamicForm({
     return <div className="text-center text-zinc-500 py-4">{emptyMessage}</div>;
   }
 
+  const mainFields = schema.filter(f => !f.scope);
+  const scopedFieldsMap: Record<string, FieldSchema[]> = {};
+  
+  schema.forEach(f => {
+    if (f.scope) {
+      if (!scopedFieldsMap[f.scope]) scopedFieldsMap[f.scope] = [];
+      scopedFieldsMap[f.scope].push(f);
+    }
+  });
+  
+  const sortedScopeNames = Object.keys(scopedFieldsMap).sort();
+
   return (
-    <div className="space-y-5">
-      {schema.map((field) => (
-        <div key={field.key} className="space-y-1.5">
-          <label className="text-xs uppercase tracking-wider mb-1.5 block font-medium text-zinc-500">
-            {field.label || field.key}
-          </label>
+    <div className="space-y-6">
+      <div className="space-y-5">
+        {mainFields.map(field => (
+          <FormField 
+            key={field.key} 
+            field={field} 
+            value={values[field.key]} 
+            onChange={onChange} 
+          />
+        ))}
+      </div>
 
-          {/* 1. 数字类型 */}
-          {field.type === "number" ? (
-            <NumberStepper
-              label=""
-              value={Number(values[field.key])}
-              onChange={(val) => onChange(field.key, val)}
-              min={field.min}
-              max={field.max}
-            />
-          ) : field.type === "select" ? (
-            /* 2. 下拉选择类型 (包含未来的 Literal 支持基础) */
-            <div className="relative">
-              <select
-                value={values[field.key]}
-                onChange={(e) => onChange(field.key, e.target.value)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-all appearance-none"
-              >
-                {field.options?.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-3 top-3 pointer-events-none text-zinc-500">
-                <Terminal className="w-4 h-4" />
-              </div>
-            </div>
-          ) : field.type === "boolean" ? (
-            /* 3. 布尔类型 */
-            <select
-              value={String(values[field.key])}
-              onChange={(e) => onChange(field.key, e.target.value === "true")}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-all appearance-none"
+      {sortedScopeNames.map(scopeName => {
+        const isExpanded = !!expandedScopes[scopeName];
+        const fields = scopedFieldsMap[scopeName];
+
+        return (
+          <div key={scopeName} className="pt-2 border-t border-zinc-800/50">
+            <button 
+              type="button" 
+              onClick={() => toggleScope(scopeName)}
+              className="flex items-center gap-2 text-sm font-medium text-zinc-400 hover:text-zinc-200 transition-colors select-none group w-full text-left py-2"
             >
-              <option value="true">True</option>
-              <option value="false">False</option>
-            </select>
-          ) : (
-            /* 4. 默认文本类型 */
-            <input
-              type="text"
-              value={values[field.key]}
-              onChange={(e) => onChange(field.key, e.target.value)}
-              placeholder={field.placeholder}
-              className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm focus:border-blue-500 outline-none transition-all placeholder-zinc-700"
-            />
-          )}
-
-          {/* 描述信息 */}
-          {field.description && (
-            <p className="text-[11px] text-zinc-500 mt-1 ml-0.5">
-              {field.description}
-            </p>
-          )}
-        </div>
-      ))}
+              <div className="text-zinc-600 group-hover:text-zinc-300 transition-colors">
+                {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+              </div>
+              <span>{scopeName}</span>
+            </button>
+            
+            {/* Scoped 区域：采用无缩进对齐设计 */}
+            {isExpanded && (
+              <div className="mt-3 grid grid-cols-1 gap-5 animate-in slide-in-from-top-1 duration-200">
+                {fields.map(field => (
+                   <FormField 
+                     key={field.key} 
+                     field={field} 
+                     value={values[field.key]} 
+                     onChange={onChange} 
+                   />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

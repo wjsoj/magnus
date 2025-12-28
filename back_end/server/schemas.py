@@ -18,6 +18,7 @@ __all__ = [
     "BlueprintCreate",
     "BlueprintResponse",
     "PagedBlueprintResponse",
+    "BlueprintParamOption",
     "BlueprintParamSchema",
 ]
 
@@ -128,14 +129,24 @@ class PagedBlueprintResponse(BaseModel):
     items: List[BlueprintResponse]
 
 
+class BlueprintParamOption(BaseModel):
+    label: str
+    value: Any
+    description: Optional[str] = None
+
+
 class BlueprintParamSchema(BaseModel):
     key: str
-    label: str
-    type: str 
+    label: str 
+    type: str
     default: Any = None
-    options: Optional[List[str]] = None
+    description: Optional[str] = None
+    scope: Optional[str] = None
     min: Optional[int] = None
     max: Optional[int] = None
-    description: Optional[str] = None
     step: Optional[float] = None
     placeholder: Optional[str] = None
+    multi_line: bool = False
+    color: Optional[str] = None
+    border_color: Optional[str] = None
+    options: Optional[List[BlueprintParamOption]] = None

@@ -19,13 +19,13 @@ export interface FieldSchema {
   // Int specific
   min?: number;
   max?: number;
-  step?: number;
 
   // Str specific
   placeholder?: string;
   multi_line?: boolean;
   color?: string;
   border_color?: string;
+  allow_empty?: boolean;
 
   // Select/Literal specific
   options?: FieldOption[];

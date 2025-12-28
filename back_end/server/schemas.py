@@ -142,9 +142,9 @@ class BlueprintParamSchema(BaseModel):
     default: Any = None
     description: Optional[str] = None
     scope: Optional[str] = None
+    allow_empty: bool = True
     min: Optional[int] = None
     max: Optional[int] = None
-    step: Optional[float] = None
     placeholder: Optional[str] = None
     multi_line: bool = False
     color: Optional[str] = None

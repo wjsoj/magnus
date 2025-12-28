@@ -77,6 +77,7 @@ class BlueprintManager:
                 schema.description = meta_dict["description"]
             if "scope" in meta_dict:
                 schema.scope = meta_dict["scope"]
+            schema.allow_empty = True
 
             # 类型分支处理
             origin_base = get_origin(base_type)
@@ -86,7 +87,6 @@ class BlueprintManager:
                 schema.type = "number"
                 if "min" in meta_dict: schema.min = meta_dict["min"]
                 if "max" in meta_dict: schema.max = meta_dict["max"]
-                if "step" in meta_dict: schema.step = meta_dict["step"]
 
             # --- Boolean ---
             elif base_type is bool:
@@ -95,6 +95,7 @@ class BlueprintManager:
             # --- String ---
             elif base_type is str:
                 schema.type = "text"
+                if "allow_empty" in meta_dict: schema.allow_empty = bool(meta_dict["allow_empty"])
                 if "placeholder" in meta_dict: schema.placeholder = meta_dict["placeholder"]
                 if "color" in meta_dict: schema.color = meta_dict["color"]
                 if "border_color" in meta_dict: schema.border_color = meta_dict["border_color"]

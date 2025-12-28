@@ -4,6 +4,7 @@ export const DEFAULT_CODE_TEMPLATE = `from typing import Annotated
 UserName = Annotated[str, {
     "label": "User Name",
     "placeholder": "enter your username on liustation2 here",
+    "allow_empty": False,
 }]
 
 GpuCount = Annotated[int, {
@@ -15,7 +16,8 @@ GpuCount = Annotated[int, {
 Timeout = Annotated[str, {
     "label": "Timeout After",
     "placeholder": "e.g. 120 or infinity",
-    "description": "Integer in minutes or 'infinity' for no time limit."
+    "description": "Integer in minutes or 'infinity' for no time limit.",
+    "allow_empty": False,
 }]
 
 def generate_job(

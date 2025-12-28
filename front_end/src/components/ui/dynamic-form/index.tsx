@@ -12,21 +12,23 @@ interface DynamicFormProps {
   onChange: (key: string, value: any) => void;
   isLoading?: boolean;
   emptyMessage?: string;
+  errorField?: string | null;
 }
 
 function DynamicStringInput({ 
   field, 
   value, 
-  onChange 
+  onChange,
+  hasError 
 }: { 
   field: FieldSchema; 
   value: string; 
   onChange: (val: string) => void;
+  hasError?: boolean;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isFocused, setIsFocused] = useState(false);
 
-  // 自动高度调整逻辑 (完美复刻 job-form)
   useEffect(() => {
     if (field.multi_line && textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -37,14 +39,16 @@ function DynamicStringInput({
   const baseClasses = cn(
     "w-full bg-zinc-950 border px-3 py-2.5 rounded-lg text-sm transition-all outline-none placeholder-zinc-700",
     field.multi_line && "font-mono leading-relaxed resize-none overflow-hidden min-h-[42px]",
-    !field.border_color 
-      ? "border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20" 
-      : "border-zinc-800"
+    hasError 
+      ? "border-red-500 animate-shake" 
+      : (!field.border_color 
+          ? "border-zinc-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20" 
+          : "border-zinc-800")
   );
 
   const dynamicStyle: React.CSSProperties = {
     color: field.color,
-    ...(field.border_color && isFocused && {
+    ...(field.border_color && !hasError && isFocused && {
       borderColor: field.border_color,
       boxShadow: `0 0 0 1px ${field.border_color}, 0 0 15px color-mix(in srgb, ${field.border_color}, transparent 80%)`
     })
@@ -71,16 +75,24 @@ function DynamicStringInput({
 function FormField({ 
   field, 
   value, 
-  onChange 
+  onChange,
+  isError 
 }: { 
   field: FieldSchema; 
   value: any; 
   onChange: (key: string, val: any) => void;
+  isError?: boolean;
 }) {
+  const showRequiredStar = field.type === "text" && field.allow_empty === false;
+
   return (
-    <div className="space-y-1.5">
-      <label className="text-xs uppercase tracking-wider mb-1.5 block font-medium text-zinc-500">
+    <div className="space-y-1.5" id={`field-${field.key}`}>
+      <label className={cn(
+        "text-xs uppercase tracking-wider mb-1.5 block font-medium transition-colors",
+        isError ? "text-red-500" : "text-zinc-500"
+      )}>
         {field.label || field.key}
+        {showRequiredStar && <span className="text-red-500 ml-0.5">*</span>}
       </label>
 
       {field.type === "number" ? (
@@ -117,6 +129,7 @@ function FormField({
           field={field} 
           value={value} 
           onChange={(val) => onChange(field.key, val)} 
+          hasError={isError}
         />
       )}
 
@@ -135,8 +148,18 @@ export function DynamicForm({
   onChange,
   isLoading = false,
   emptyMessage = "No parameters required.",
+  errorField = null
 }: DynamicFormProps) {
   const [expandedScopes, setExpandedScopes] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    if (errorField) {
+      const field = schema.find(f => f.key === errorField);
+      if (field && field.scope) {
+        setExpandedScopes(prev => ({ ...prev, [field.scope!]: true }));
+      }
+    }
+  }, [errorField, schema]);
 
   const toggleScope = (scopeName: string) => {
     setExpandedScopes(prev => ({ ...prev, [scopeName]: !prev[scopeName] }));
@@ -174,7 +197,8 @@ export function DynamicForm({
             key={field.key} 
             field={field} 
             value={values[field.key]} 
-            onChange={onChange} 
+            onChange={onChange}
+            isError={errorField === field.key}
           />
         ))}
       </div>
@@ -196,7 +220,6 @@ export function DynamicForm({
               <span>{scopeName}</span>
             </button>
             
-            {/* Scoped 区域：采用无缩进对齐设计 */}
             {isExpanded && (
               <div className="mt-3 grid grid-cols-1 gap-5 animate-in slide-in-from-top-1 duration-200">
                 {fields.map(field => (
@@ -204,7 +227,8 @@ export function DynamicForm({
                      key={field.key} 
                      field={field} 
                      value={values[field.key]} 
-                     onChange={onChange} 
+                     onChange={onChange}
+                     isError={errorField === field.key}
                    />
                 ))}
               </div>

@@ -16,24 +16,31 @@ interface BlueprintRunnerProps {
 
 export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
   const router = useRouter();
+  
   const [paramsSchema, setParamsSchema] = useState<FieldSchema[]>([]);
   const [formValues, setFormValues] = useState<Record<string, any>>({});
+  
   const [isLoadingSchema, setIsLoadingSchema] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
 
+  const [errorField, setErrorField] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   useEffect(() => {
     if (blueprint?.id) {
-      let isMounted = true; // 防止组件卸载后设置状态
+      let isMounted = true; 
 
       const fetchSchema = async () => {
         setIsLoadingSchema(true);
         setParamsSchema([]);
+        setErrorField(null);
+        setErrorMessage(null);
+
         try {
           const schema = await client(`/api/blueprints/${blueprint.id}/schema`);
 
           if (isMounted) {
             setParamsSchema(schema);
-            // 初始化默认值
             const initial: Record<string, any> = {};
             schema.forEach((p: FieldSchema) => {
               initial[p.key] = p.default ?? "";
@@ -57,15 +64,51 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blueprint?.id]);
 
+  const scrollToError = (key: string) => {
+    // 给予微小的延时，确保 DynamicForm 内部的 useEffect 已经处理完 Scope 的展开渲染
+    setTimeout(() => {
+      const el = document.getElementById(`field-${key}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
+  };
+
   const handleRun = async () => {
     if (!blueprint) return;
+
+    setErrorField(null);
+    setErrorMessage(null);
+
+    for (const param of paramsSchema) {
+      // 仅检查 text 类型且明确标记 allow_empty 为 false 的字段
+      if (param.type === 'text' && param.allow_empty === false) {
+        const val = formValues[param.key];
+        if (!val || (typeof val === 'string' && !val.trim())) {
+          const label = param.label || param.key;
+          setErrorField(param.key);
+          setErrorMessage(`⚠️ ${label} is required`);
+          scrollToError(param.key);
+          return;
+        }
+      }
+    }
+
     setIsRunning(true);
     try {
       await client(`/api/blueprints/${blueprint.id}/run`, { method: "POST", json: formValues });
       router.push('/jobs');
     } catch (e: any) {
-      alert(`Failed to start task: ${e.message}`);
+      setErrorMessage(`Error: ${e.message}`);
       setIsRunning(false);
+    }
+  };
+
+  const handleFieldChange = (key: string, val: any) => {
+    setFormValues(prev => ({ ...prev, [key]: val }));
+    if (errorField === key) {
+      setErrorField(null);
+      setErrorMessage(null);
     }
   };
 
@@ -83,14 +126,23 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
           <DynamicForm
             schema={paramsSchema}
             values={formValues}
-            onChange={(key, val) => setFormValues(prev => ({ ...prev, [key]: val }))}
+            onChange={handleFieldChange}
             isLoading={isLoadingSchema}
+            errorField={errorField}
           />
         </div>
 
-        {/* 底部按钮栏：mt-auto 确保沉底 */}
         <div className="mt-auto pt-6 border-t border-zinc-800 flex flex-col-reverse sm:flex-row sm:justify-between sm:items-center gap-4 pb-1">
-          <span className="text-zinc-500 text-xs text-center sm:text-left hidden sm:block">Waiting for launch</span>
+          {errorMessage ? (
+            <span className="text-red-500 text-xs font-bold animate-pulse text-center sm:text-left transition-all">
+              {errorMessage}
+            </span>
+          ) : (
+            <span className="text-zinc-500 text-xs text-center sm:text-left hidden sm:block transition-all">
+              Waiting for launch
+            </span>
+          )}
+          
           <div className="flex gap-3 w-full sm:w-auto">
             <button
               onClick={onClose}
@@ -104,7 +156,17 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
               disabled={isRunning || isLoadingSchema}
               className="flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> Launching...</> : <><Play className="w-4 h-4 fill-current" /> Launch</>}
+              {isRunning ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> 
+                  Launching...
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4 fill-current" /> 
+                  Launch
+                </>
+              )}
             </button>
           </div>
         </div>

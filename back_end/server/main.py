@@ -25,6 +25,7 @@ class EndpointFilter(logging.Filter):
             "GET /api/dashboard/stats",
             "GET /api/dashboard/my-active-jobs",
             "GET /api/blueprints",
+            "GET /api/services",
             "/logs HTTP",
             "OPTIONS /api",
         ])

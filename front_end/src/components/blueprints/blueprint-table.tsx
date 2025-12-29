@@ -27,26 +27,29 @@ export function BlueprintTable({
 }: BlueprintTableProps) {
   const { user: currentUser } = useAuth();
 
+  // [修改] 背景色改为 bg-zinc-900/40，并添加 backdrop-blur-sm
   if (loading) {
     return (
-      <div className="border border-zinc-800 rounded-xl bg-zinc-900/30 shadow-sm flex flex-col items-center justify-center text-zinc-500 gap-3 min-h-[400px]">
+      <div className="border border-zinc-800 rounded-xl bg-zinc-900/40 backdrop-blur-sm shadow-sm flex flex-col items-center justify-center text-zinc-500 gap-3 min-h-[400px]">
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
         <p className="text-sm font-medium">Fetching blueprints...</p>
       </div>
     );
   }
 
+  // [修改] 背景色改为 bg-zinc-900/40，并添加 backdrop-blur-sm
   if (data.length === 0) {
     return (
-      <div className="border border-zinc-800 rounded-xl bg-zinc-900/30 shadow-sm flex flex-col items-center justify-center text-zinc-500 min-h-[400px]">
+      <div className="border border-zinc-800 rounded-xl bg-zinc-900/40 backdrop-blur-sm shadow-sm flex flex-col items-center justify-center text-zinc-500 min-h-[400px]">
         <FileCode className="w-10 h-10 opacity-20 mb-3" />
         <p className="text-base font-medium text-zinc-400">{emptyMessage}</p>
       </div>
     );
   }
 
+  // [修改] 背景色改为 bg-zinc-900/40，并添加 backdrop-blur-sm
   return (
-    <div className="border border-zinc-800 rounded-xl bg-zinc-900/30 shadow-sm flex flex-col overflow-hidden min-h-[400px]">
+    <div className="border border-zinc-800 rounded-xl bg-zinc-900/40 backdrop-blur-sm shadow-sm flex flex-col overflow-hidden min-h-[400px]">
       <div className="overflow-x-auto w-full">
         <table className="w-full text-left text-sm whitespace-nowrap table-fixed">
           <thead className="bg-zinc-900/90 text-zinc-500 border-b border-zinc-800 backdrop-blur-md">

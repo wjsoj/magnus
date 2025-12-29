@@ -6,6 +6,12 @@ import { Wrench, Construction } from "lucide-react";
 export default function ToolsPage() {
   return (
     <div className="flex flex-col items-center justify-center h-full w-full min-h-[calc(100vh-4rem)] text-zinc-500 animate-in fade-in duration-500">
+      <style jsx global>{`
+          .prism-editor textarea { outline: none !important; }
+          code[class*="language-"], pre[class*="language-"] { text-shadow: none !important; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important; }
+          ::-webkit-scrollbar { display: none; }
+          html { -ms-overflow-style: none; scrollbar-width: none; }
+      `}</style>
       <div className="p-6 rounded-full bg-zinc-900/50 border border-zinc-800/50 mb-6">
         <Wrench className="w-12 h-12 text-zinc-600" />
       </div>

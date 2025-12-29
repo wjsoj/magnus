@@ -1,7 +1,7 @@
 # back_end/server/schemas.py
 from typing import Any, List, Optional
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .models import JobType, JobStatus
 
 
@@ -20,6 +20,9 @@ __all__ = [
     "PagedBlueprintResponse",
     "BlueprintParamOption",
     "BlueprintParamSchema",
+    "ServiceCreate",
+    "ServiceResponse",
+    "PagedServiceResponse",
 ]
 
 
@@ -150,3 +153,46 @@ class BlueprintParamSchema(BaseModel):
     color: Optional[str] = None
     border_color: Optional[str] = None
     options: Optional[List[BlueprintParamOption]] = None
+    
+    
+class ServiceCreate(BaseModel):
+    id: str = Field(..., description="Slug ID for the service, e.g., 'my-notebook'")
+    name: str
+    description: Optional[str] = None
+    
+    # Service Config
+    request_timeout: int = 60
+    idle_timeout: int = 30
+    
+    # Job Config
+    namespace: str
+    repo_name: str
+    branch: str
+    commit_sha: str
+    entry_command: str
+    gpu_count: int = 1
+    gpu_type: str
+    
+    # === 补全缺失的配置 ===
+    job_type: JobType = JobType.A2 # 新增: 优先级
+    
+    cpu_count: Optional[int] = None
+    memory_demand: Optional[str] = None
+    runner: Optional[str] = None
+
+class ServiceResponse(ServiceCreate):
+    # ... (保持不变，因为继承了 ServiceCreate，会自动包含 job_type)
+    owner_id: str
+    is_active: bool
+    last_activity_time: datetime
+    current_job_id: Optional[str] = None
+    assigned_port: Optional[int] = None
+    current_job: Optional[JobResponse] = None
+    owner: Optional[UserInfo] = None
+    
+    class Config: from_attributes = True
+    
+    
+class PagedServiceResponse(BaseModel):
+    total: int
+    items: List[ServiceResponse]

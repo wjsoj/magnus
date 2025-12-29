@@ -12,6 +12,7 @@ from ._magnus_config import *
 from . import models
 from .database import *
 from ._scheduler import scheduler
+from ._service_manager import service_manager
 
 
 class EndpointFilter(logging.Filter):
@@ -60,13 +61,17 @@ async def lifespan(
 ):
     scheduler_task = asyncio.create_task(run_scheduler_loop())
     
+    service_manager_task = asyncio.create_task(service_manager.start_background_loop())
+    
     yield
     
     logger.info("Shutting down...")
     
     scheduler_task.cancel()
+    service_manager_task.cancel()
     try:
         await scheduler_task
+        await service_manager_task
     except asyncio.CancelledError:
         logger.info("Scheduler loop stopped.")
     

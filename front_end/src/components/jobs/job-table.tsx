@@ -1,4 +1,4 @@
-// src/components/jobs/job-table.tsx
+// front_end/src/components/jobs/job-table.tsx
 "use client";
 
 import { useRouter } from "next/navigation";
@@ -10,6 +10,7 @@ import { JobPriorityBadge } from "@/components/jobs/job-priority-badge";
 import { JobStatusBadge } from "@/components/jobs/job-status-badge";
 import { UserAvatar } from "@/components/ui/user-avatar";
 import { formatBeijingTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 interface JobTableProps {
   jobs: Job[];
@@ -20,40 +21,37 @@ interface JobTableProps {
   className?: string;
 }
 
-export function JobTable({ 
-  jobs, 
-  loading, 
-  onClone, 
+export function JobTable({
+  jobs,
+  loading,
+  onClone,
   onTerminate,
   emptyMessage = "No jobs found",
-  className = "min-h-[300px]" // 默认高度设为 300px，但可以被外部覆盖
+  className = "min-h-[400px]",
 }: JobTableProps) {
   const router = useRouter();
   const { user: currentUser } = useAuth();
 
-  // --- Loading State ---
   if (loading) {
     return (
-      <div className={`border border-zinc-800 rounded-xl bg-zinc-900/30 shadow-sm flex flex-col items-center justify-center text-zinc-500 gap-3 ${className}`}>
+      <div className={cn("border border-zinc-800 rounded-xl bg-zinc-900/40 backdrop-blur-sm shadow-sm flex flex-col items-center justify-center text-zinc-500 gap-3", className)}>
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
         <p className="text-sm font-medium">Fetching jobs...</p>
       </div>
     );
   }
 
-  // --- Empty State ---
   if (jobs.length === 0) {
     return (
-      <div className={`border border-zinc-800 rounded-xl bg-zinc-900/30 shadow-sm flex flex-col items-center justify-center text-zinc-500 ${className}`}>
+      <div className={cn("border border-zinc-800 rounded-xl bg-zinc-900/40 backdrop-blur-sm shadow-sm flex flex-col items-center justify-center text-zinc-500", className)}>
         <Box className="w-10 h-10 opacity-20 mb-3" />
         <p className="text-base font-medium text-zinc-400">{emptyMessage}</p>
       </div>
     );
   }
 
-  // --- Table Content ---
   return (
-    <div className={`border border-zinc-800 rounded-xl bg-zinc-900/30 shadow-sm flex flex-col overflow-hidden ${className ? className.replace(/min-h-\[.*?\]/g, '') : ''}`}> 
+    <div className={cn("border border-zinc-800 rounded-xl bg-zinc-900/40 backdrop-blur-sm shadow-sm flex flex-col overflow-hidden", className)}>
       <div className="overflow-x-auto w-full">
         <table className="w-full text-left text-sm whitespace-nowrap table-fixed">
           <thead className="bg-zinc-900/90 text-zinc-500 border-b border-zinc-800 backdrop-blur-md">
@@ -79,7 +77,6 @@ export function JobTable({
                   onClick={() => router.push(`/jobs/${job.id}`)}
                   className="hover:bg-zinc-800/40 transition-colors group border-b border-zinc-800/50 last:border-0"
                 >
-                  {/* Task Name & ID */}
                   <td className="px-6 py-4 align-top whitespace-normal break-all">
                     <div className="flex flex-col gap-1.5">
                       <div className="flex items-center gap-2">
@@ -95,17 +92,14 @@ export function JobTable({
                     </div>
                   </td>
 
-                  {/* Priority */}
                   <td className="px-6 py-4 align-top text-center">
                     <JobPriorityBadge type={job.job_type} />
                   </td>
 
-                  {/* Status */}
                   <td className="px-6 py-4 align-top text-center">
                     <JobStatusBadge status={job.status} />
                   </td>
 
-                  {/* Github Info */}
                   <td className="px-6 py-4 align-top">
                     <div className="flex flex-col gap-1.5 items-center">
                       <span className="text-zinc-300 flex items-center gap-2 text-xs font-medium bg-zinc-900/50 w-fit px-2 py-1 rounded border border-zinc-800">
@@ -128,7 +122,6 @@ export function JobTable({
                     </div>
                   </td>
 
-                  {/* Resources */}
                   <td className="px-6 py-4 align-top text-center">
                     <span className="text-zinc-300 text-sm font-medium">
                       {job.gpu_type === "cpu"
@@ -137,7 +130,6 @@ export function JobTable({
                     </span>
                   </td>
 
-                  {/* Creator */}
                   <td className="px-6 py-4 align-top">
                     <div className="flex justify-center">
                       <UserAvatar
@@ -147,7 +139,6 @@ export function JobTable({
                     </div>
                   </td>
 
-                  {/* Actions */}
                   <td className="px-6 py-4 align-middle text-right">
                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
                       <button

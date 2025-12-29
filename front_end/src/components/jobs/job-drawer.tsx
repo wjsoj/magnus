@@ -23,7 +23,7 @@ export function JobDrawer({
   
   const title = mode === 'create' ? "Submit New Job" : "Clone Job";
   const icon = mode === 'create' ? <Rocket className="w-5 h-5 text-blue-500"/> : <RefreshCw className="w-5 h-5 text-purple-500"/>;
-  const desc = mode === 'clone' ? "Configurations pre-filled from previous task" : undefined;
+  const desc = undefined;
 
   return (
     <Drawer

@@ -1,7 +1,8 @@
+# back_end/server/models.py
 import secrets
 import enum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum as SQLEnum, JSON
+from sqlalchemy import Integer, String, DateTime, Text, ForeignKey, Enum as SQLEnum, Boolean
 from datetime import datetime
 from .database import Base
 
@@ -14,6 +15,7 @@ __all__ = [
     "JobMetric",
     "ClusterSnapshot",
     "Blueprint",
+    "Service",
 ]
 
 
@@ -47,7 +49,9 @@ class User(Base):
     email: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     token: Mapped[str | None] = mapped_column(String, nullable=True)
+    
     jobs: Mapped[list["Job"]] = relationship(back_populates="user")
+    services: Mapped[list["Service"]] = relationship(back_populates="owner")
 
 
 class Job(Base):
@@ -57,24 +61,29 @@ class Job(Base):
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id"), nullable=True)
     user: Mapped["User"] = relationship(back_populates="jobs")
+    
     namespace: Mapped[str] = mapped_column(String)
     repo_name: Mapped[str] = mapped_column(String)
     branch: Mapped[str] = mapped_column(String)
     commit_sha: Mapped[str] = mapped_column(String)
+    entry_command: Mapped[str] = mapped_column(Text)
+    
     gpu_count: Mapped[int] = mapped_column(Integer)
     gpu_type: Mapped[str] = mapped_column(String)
-    entry_command: Mapped[str] = mapped_column(Text)
+    cpu_count: Mapped[int | None] = mapped_column(Integer, default=None)
+    memory_demand: Mapped[str | None] = mapped_column(String, default=None)
+    
     status: Mapped[JobStatus] = mapped_column(SQLEnum(JobStatus), default=JobStatus.PENDING)
     job_type: Mapped[JobType] = mapped_column(SQLEnum(JobType), default=JobType.A2)
     slurm_job_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    runner: Mapped[str | None] = mapped_column(String, nullable=None)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     start_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    cpu_count: Mapped[int | None] = mapped_column(Integer, default=None)
-    memory_demand: Mapped[str | None] = mapped_column(String, default=None)
-    runner: Mapped[str | None] = mapped_column(String, nullable=None)
+    
     metrics: Mapped[list["JobMetric"]] = relationship(
-        back_populates = "job", 
-        cascade = "all, delete-orphan",
+        back_populates="job", 
+        cascade="all, delete-orphan",
     )
 
 
@@ -85,8 +94,8 @@ class JobMetric(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     status_json: Mapped[str] = mapped_column(Text)
     job: Mapped["Job"] = relationship(back_populates="metrics")
- 
-    
+
+
 class ClusterSnapshot(Base):
     __tablename__ = "cluster_snapshots"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -94,8 +103,8 @@ class ClusterSnapshot(Base):
     total_gpus: Mapped[int] = mapped_column(Integer)
     slurm_used_gpus: Mapped[int] = mapped_column(Integer)
     magnus_used_gpus: Mapped[int] = mapped_column(Integer)
-    
-    
+
+
 class Blueprint(Base):
     __tablename__ = "blueprints"
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -105,3 +114,30 @@ class Blueprint(Base):
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Service(Base):
+    __tablename__ = "services"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"))
+    owner: Mapped["User"] = relationship(back_populates="services")
+    name: Mapped[str] = mapped_column(String)
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_activity_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    current_job_id: Mapped[str | None] = mapped_column(String, ForeignKey("jobs.id"), nullable=True)
+    current_job: Mapped["Job"] = relationship()
+    assigned_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_timeout: Mapped[int] = mapped_column(Integer, default=60)
+    idle_timeout: Mapped[int] = mapped_column(Integer, default=30)
+    namespace: Mapped[str] = mapped_column(String)
+    repo_name: Mapped[str] = mapped_column(String)
+    branch: Mapped[str] = mapped_column(String)
+    commit_sha: Mapped[str] = mapped_column(String)
+    entry_command: Mapped[str] = mapped_column(Text)
+    gpu_count: Mapped[int] = mapped_column(Integer, default=1)
+    gpu_type: Mapped[str] = mapped_column(String)
+    job_type: Mapped[JobType] = mapped_column(SQLEnum(JobType), default=JobType.B2)
+    cpu_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    memory_demand: Mapped[str | None] = mapped_column(String, nullable=True)
+    runner: Mapped[str | None] = mapped_column(String, nullable=True)

@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Search, DraftingCompass } from "lucide-react";
+import { Search, Plus } from "lucide-react";
 import { client } from "@/lib/api";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { SearchableSelect } from "@/components/ui/searchable-select";
@@ -108,7 +108,7 @@ export default function BlueprintsPage() {
           <p className="text-zinc-500 text-sm mt-1">Standardized task templates via Python-defined logic.</p>
         </div>
         <button onClick={() => { setEditorData({ id: "", title: "", description: "", code: DEFAULT_CODE_TEMPLATE }); setEditorMode('create'); setIsEditorOpen(true); }} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors shadow-lg shadow-blue-900/20 active:scale-95 border border-blue-500/50">
-            <DraftingCompass className="w-4 h-4"/> New Blueprint
+            <Plus className="w-4 h-4"/> New Blueprint
         </button>
       </div>
 

@@ -1,9 +1,6 @@
-// front_end/src/lib/api.ts (最终迭代版本)
+// front_end/src/lib/api.ts
 import { API_BASE } from "./config";
 
-// -------------------------------------------------------------------
-// 核心修复: 引入 'json' 属性来承载需要自动序列化的对象
-// -------------------------------------------------------------------
 interface FetchOptions extends RequestInit {
   // 保持 RequestInit.body 的原始定义，避免 ts(2430) 错误
   // 新增 json 属性来接受原生对象，用于自动 JSON.stringify
@@ -37,7 +34,7 @@ export async function client(endpoint: string, { json, body, ...customConfig }: 
     },
   };
 
-  // 核心实现：如果提供了 json 对象，则进行序列化
+  // 如果提供了 json 对象，则进行序列化
   if (json) {
     config.body = JSON.stringify(json);
   } else if (body) {

@@ -446,15 +446,16 @@ def main():
         os.chdir(repo_dir)
         conda_shell_script_path = {repr(conda_shell_script_path)}
         execution_conda_environment = {repr(execution_conda_environment)}
-        full_command = " && ".join([
+        
+        setup_commands = [
             "set -e",
             f"export HOME=/home/{{effective_runner}}",
             f"source '{{conda_shell_script_path}}'",
             f"conda activate {{execution_conda_environment}}",
             "unset VIRTUAL_ENV",
             "export UV_CACHE_DIR={magnus_uv_cache}",
-            f"{{user_cmd_str}}"
-        ])
+        ]
+        full_command = "\n".join(setup_commands) + f"\n\n{{user_cmd_str}}"
 
         ret_code = subprocess.call(
             full_command,

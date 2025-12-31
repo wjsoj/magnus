@@ -160,6 +160,7 @@ class ServiceCreate(BaseModel):
     id: str = Field(..., description="Slug ID for the service")
     name: str
     description: Optional[str] = None
+    is_active: bool = True
     request_timeout: int = 60
     idle_timeout: int = 30
     max_concurrency: int = 64
@@ -180,7 +181,6 @@ class ServiceCreate(BaseModel):
 
 class ServiceResponse(ServiceCreate):
     owner_id: str
-    is_active: bool
     last_activity_time: datetime
     current_job_id: Optional[str] = None
     assigned_port: Optional[int] = None

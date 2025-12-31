@@ -2,7 +2,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, Terminal, RefreshCw, DraftingCompass } from "lucide-react";
+import { Loader2, Terminal, RefreshCw, DraftingCompass, Save } from "lucide-react";
 import { Drawer } from "@/components/ui/drawer";
 
 import Editor from "react-simple-code-editor";
@@ -39,6 +39,10 @@ export function BlueprintEditor({ isOpen, mode, initialData, onClose, onSave, is
       setErrorMessage(null);
     }
   }, [isOpen, initialData]);
+
+  // [Magnus Update] 判断是否是针对原始 ID 的操作 (Update)
+  // 如果是 Clone 模式进入，且 ID 未发生变更，则视为 Update 操作
+  const isOriginalId = mode === 'clone' && formData.id === initialData.id;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     const target = e.currentTarget as HTMLTextAreaElement;
@@ -127,7 +131,8 @@ export function BlueprintEditor({ isOpen, mode, initialData, onClose, onSave, is
     <Drawer
       isOpen={isOpen}
       onClose={onClose}
-      title={mode === 'create' ? "Create Blueprint" : "Clone Blueprint"}
+      // Drawer 标题保持原始意图 (Create/Clone)，但操作按钮会根据 ID 变化而变化
+      title={mode === 'create' ? "Create Blueprint" : "Clone / Update Blueprint"}
       icon={mode === 'create' ? <DraftingCompass className="w-5 h-5 text-blue-500" /> : <RefreshCw className="w-5 h-5 text-purple-500" />}
       width="w-full max-w-4xl"
     >
@@ -160,6 +165,7 @@ export function BlueprintEditor({ isOpen, mode, initialData, onClose, onSave, is
                 value={formData.id}
                 onChange={e => { setFormData({ ...formData, id: e.target.value }); clearError('id'); }}
                 placeholder="e.g. my-debug-tool"
+                // [Magnus Update] 这里允许修改 ID，不再锁定
                 className={`w-full bg-zinc-950 border px-4 py-2.5 rounded-lg text-zinc-200 text-sm focus:border-blue-500 outline-none transition-all placeholder-zinc-700 
                     ${errorField === 'id' ? 'animate-shake border-red-500' : 'border-zinc-800'}`}
               />
@@ -205,13 +211,26 @@ export function BlueprintEditor({ isOpen, mode, initialData, onClose, onSave, is
           {errorMessage ? (
             <span className="text-red-500 text-xs font-bold animate-pulse">{errorMessage}</span>
           ) : (
-            <span className="text-zinc-500 text-xs hidden sm:block">Waiting to be saved.</span>
+            <span className="text-zinc-500 text-xs hidden sm:block">
+               {isOriginalId ? "Updating existing blueprint." : "Creating new blueprint definition."}
+            </span>
           )}
           <div className="flex gap-3 w-full sm:w-auto">
             <button onClick={onClose} className="flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-sm font-medium text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors">Cancel</button>
-            <button onClick={handleSubmit} disabled={isSaving} className="flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2">
-              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : (mode === 'create' ? <DraftingCompass className="w-4 h-4" /> : <RefreshCw className="w-4 h-4" />)}
-              {mode === 'create' ? "Create Blueprint" : "Clone Blueprint"}
+            <button 
+                onClick={handleSubmit} 
+                disabled={isSaving} 
+                className="flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              {isSaving ? (
+                 <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                 // [Magnus Update] 图标和文字逻辑：Update用保存图标，Create/Clone用原逻辑
+                 isOriginalId ? <Save className="w-4 h-4" /> : (mode === 'create' ? <DraftingCompass className="w-4 h-4" /> : <RefreshCw className="w-4 h-4" />)
+              )}
+              
+              {/* [Magnus Update] 按钮文字逻辑 */}
+              {isOriginalId ? "Update Blueprint" : (mode === 'create' ? "Create Blueprint" : "Clone Blueprint")}
             </button>
           </div>
         </div>

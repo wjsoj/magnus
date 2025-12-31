@@ -142,29 +142,31 @@ export function ServiceTable({
                   <td className="px-6 py-4 align-middle text-right">
                     <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-all transform translate-x-2 group-hover:translate-x-0">
                       
-                      {/* Clone / Edit Button */}
+                      {/* Clone / Edit Button: 所有人可见 (Clone)，Owner 点击是 Edit */}
                       <button 
                         onClick={(e) => { e.stopPropagation(); onClone(svc); }} 
                         className="p-2 bg-zinc-800 hover:bg-zinc-700 hover:text-white rounded-lg text-zinc-400 transition-colors border border-zinc-700/50 shadow-sm" 
-                        title="Clone / Edit"
+                        title={isOwner ? "Edit Service" : "Clone Service"}
                       >
                         <RefreshCw className="w-4 h-4" />
                       </button>
 
-                      {/* Toggle Button */}
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); onToggle(svc); }} 
-                        className={`p-2 rounded-lg transition-colors border shadow-sm ${
-                          svc.is_active 
-                            ? "bg-teal-900/20 hover:bg-teal-900/40 text-teal-400 border-teal-500/20" 
-                            : "bg-zinc-800 hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 border-zinc-700/50"
-                        }`}
-                        title={svc.is_active ? "Stop Service" : "Start Service"}
-                      >
-                        <Power className="w-4 h-4" />
-                      </button>
+                      {/* [Magnus Fix] Toggle Button: 仅 Owner 可见 */}
+                      {isOwner && (
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); onToggle(svc); }} 
+                            className={`p-2 rounded-lg transition-colors border shadow-sm ${
+                            svc.is_active 
+                                ? "bg-teal-900/20 hover:bg-teal-900/40 text-teal-400 border-teal-500/20" 
+                                : "bg-zinc-800 hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 border-zinc-700/50"
+                            }`}
+                            title={svc.is_active ? "Stop Service" : "Start Service"}
+                        >
+                            <Power className="w-4 h-4" />
+                        </button>
+                      )}
 
-                      {/* Delete Button (Only Owner) */}
+                      {/* Delete Button: 仅 Owner 可见 */}
                       {isOwner && (
                         <button 
                           onClick={(e) => { e.stopPropagation(); onDelete(svc); }} 
@@ -174,6 +176,7 @@ export function ServiceTable({
                           <Trash2 className="w-4 h-4" />
                         </button>
                       )}
+
                     </div>
                   </td>
                 </tr>

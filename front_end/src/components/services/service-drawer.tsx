@@ -25,7 +25,7 @@ export function ServiceDrawer({
 }: ServiceDrawerProps): JSX.Element {
 
   const isEdit = !!initialData;
-  const title = isEdit ? "Edit Service" : "Create New Service";
+  const title = isEdit ? "Clone / Update Service" : "Create Service";
   const description = undefined;
 
 

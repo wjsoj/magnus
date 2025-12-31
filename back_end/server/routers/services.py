@@ -74,12 +74,11 @@ async def create_service(
         db.refresh(existing)
         return existing
 
-    # 2. Create new
+    # Create new
+    data["is_active"] = False
     new_service = Service(
         **data,
         owner_id=current_user.id,
-        is_active=True,
-        # 初始化两个时间
         last_activity_time=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )

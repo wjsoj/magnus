@@ -22,7 +22,7 @@ router = APIRouter()
     "/blueprints",
     response_model=BlueprintResponse,
 )
-async def create_blueprint(
+def create_blueprint(
     bp: BlueprintCreate,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -65,7 +65,7 @@ async def create_blueprint(
 
 
 @router.delete("/blueprints/{blueprint_id}")
-async def delete_blueprint(
+def delete_blueprint(
     blueprint_id: str,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -91,7 +91,7 @@ async def delete_blueprint(
     "/blueprints",
     response_model=PagedBlueprintResponse,
 )
-async def list_blueprints(
+def list_blueprints(
     skip: int = 0,
     limit: int = 20,
     search: Optional[str] = None,
@@ -134,7 +134,7 @@ async def list_blueprints(
     "/blueprints/{blueprint_id}/schema",
     response_model=List[BlueprintParamSchema],
 )
-async def get_blueprint_schema(
+def get_blueprint_schema(
     blueprint_id: str,
     db: Session = Depends(database.get_db),
 ):
@@ -149,7 +149,7 @@ async def get_blueprint_schema(
 
 
 @router.post("/blueprints/{blueprint_id}/run")
-async def run_blueprint(
+def run_blueprint(
     blueprint_id: str,
     params: Dict[str, Any],
     db: Session = Depends(database.get_db),

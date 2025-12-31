@@ -1,7 +1,9 @@
 # back_end/server/main.py
+import anyio
 import asyncio
 import logging
 import uvicorn
+import concurrent.futures
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,8 +62,18 @@ async def run_scheduler_loop(
 async def lifespan(
     app: FastAPI
 ):
-    scheduler_task = asyncio.create_task(run_scheduler_loop())
     
+    thread_pool_size = 200
+    
+    # 调整 asyncio 默认线程池 (影响 await asyncio.to_thread)
+    loop = asyncio.get_running_loop()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=thread_pool_size)
+    loop.set_default_executor(executor)
+    # 调整 AnyIO 默认限流器 (影响 FastAPI 的 def 路由)
+    limiter = anyio.to_thread.current_default_thread_limiter() # type: ignore
+    limiter.total_tokens = thread_pool_size
+    
+    scheduler_task = asyncio.create_task(run_scheduler_loop())
     service_manager_task = asyncio.create_task(service_manager.start_background_loop())
     
     yield

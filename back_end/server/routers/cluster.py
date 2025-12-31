@@ -36,7 +36,7 @@ def _scheduler_sort_key(job):
     "/cluster/stats",
     response_model=ClusterStatsResponse,
 )
-async def get_cluster_stats(
+def get_cluster_stats(
     running_skip: int = 0,
     running_limit: int = 10,
     pending_skip: int = 0,
@@ -44,6 +44,7 @@ async def get_cluster_stats(
     db: Session = Depends(database.get_db),
 ):
     # --- 1. 获取 Slurm 真实数据 ---
+    # SlurmManager 涉及阻塞 Shell 命令，必须在线程池中运行 (def)
     slurm_manager = SlurmManager()
     all_slurm_tasks = slurm_manager.get_all_running_tasks()
 
@@ -156,7 +157,7 @@ async def get_cluster_stats(
     "/dashboard/my-active-jobs",
     response_model=DashboardJobsResponse,
 )
-async def get_my_active_jobs(
+def get_my_active_jobs(
     skip: int = 0,
     limit: int = 5,
     db: Session = Depends(database.get_db),
@@ -164,7 +165,6 @@ async def get_my_active_jobs(
 ):
     """
     Dashboard 专用：获取当前用户“活跃”的任务
-    支持分页：先获取全量数据进行复杂排序，再内存切片
     """
     # 获取 Running 任务
     running_orm = db.query(models.Job).filter(
@@ -195,7 +195,7 @@ async def get_my_active_jobs(
 
 
 @router.get("/dashboard/stats")
-async def get_dashboard_stats(
+def get_dashboard_stats(
     current_user: models.User = Depends(get_current_user),
     db: Session = Depends(database.get_db),
 ):
@@ -207,7 +207,7 @@ async def get_dashboard_stats(
     now = datetime.utcnow()
 
     # --- 逻辑 A: 计算真实的 Occupancy (Allocation) ---
-    def get_real_occupancy(hours: int)-> float:
+    def get_real_occupancy(hours: int) -> float:
         start_time = now - timedelta(hours=hours)
         snapshots = db.query(models.ClusterSnapshot).filter(
             models.ClusterSnapshot.timestamp >= start_time

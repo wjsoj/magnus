@@ -2,6 +2,7 @@
 import secrets
 import logging
 import jwt
+import asyncio
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,14 +22,48 @@ router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/feishu/login")
 
 
-def generate_trust_token()-> str:
+def generate_trust_token() -> str:
     return f"sk-{secrets.token_urlsafe(24)}"
 
 
-async def get_current_user(
+def _upsert_feishu_user_sync(db: Session, feishu_user: dict) -> models.User:
+    """同步处理飞书用户的创建或更新"""
+    open_id = feishu_user.get("open_id") or feishu_user.get("union_id")
+    if not open_id:
+        raise HTTPException(status_code=400, detail="Missing OpenID")
+
+    db_user = db.query(models.User).filter(models.User.feishu_open_id == open_id).first()
+
+    if not db_user:
+        db_user = models.User(
+            feishu_open_id=open_id,
+            name=feishu_user.get("name", "Unknown"),
+            avatar_url=feishu_user.get("avatar_url"),
+            email=feishu_user.get("email"),
+            token=generate_trust_token(),
+        )
+        db.add(db_user)
+        db.commit()
+        db.refresh(db_user)
+    else:
+        db_user.name = feishu_user.get("name", db_user.name)
+        db_user.avatar_url = feishu_user.get("avatar_url", db_user.avatar_url)
+        if not db_user.token:
+            db_user.token = generate_trust_token()
+        db.commit()
+        db.refresh(db_user)
+    
+    return db_user
+
+
+def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: Session = Depends(database.get_db),
-)-> models.User:
+) -> models.User:
+    """
+    [Critical Fix] 改为同步 def。
+    FastAPI 会自动将此依赖项放入线程池运行，防止 db.query 阻塞主事件循环。
+    """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -62,35 +97,14 @@ async def feishu_login(
     req: FeishuLoginRequest,
     db: Session = Depends(database.get_db),
 ):
+    # 1. 异步 I/O: 获取飞书信息
     try:
         feishu_user = await feishu_client.get_feishu_user(req.code)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    open_id = feishu_user.get("open_id") or feishu_user.get("union_id")
-    if not open_id:
-        raise HTTPException(status_code=400, detail="Missing OpenID")
-
-    db_user = db.query(models.User).filter(models.User.feishu_open_id == open_id).first()
-
-    if not db_user:
-        db_user = models.User(
-            feishu_open_id=open_id,
-            name=feishu_user.get("name", "Unknown"),
-            avatar_url=feishu_user.get("avatar_url"),
-            email=feishu_user.get("email"),
-            token=generate_trust_token(),
-        )
-        db.add(db_user)
-        db.commit()
-        db.refresh(db_user)
-    else:
-        db_user.name = feishu_user.get("name", db_user.name)
-        db_user.avatar_url = feishu_user.get("avatar_url", db_user.avatar_url)
-        if not db_user.token:
-            db_user.token = generate_trust_token()
-        db.commit()
-        db.refresh(db_user)
+    # 2. 同步 I/O: 数据库 Upsert (移入线程池)
+    db_user = await asyncio.to_thread(_upsert_feishu_user_sync, db, feishu_user)
 
     access_token = jwt_signer.create_access_token(payload={"sub": db_user.id})
 
@@ -105,7 +119,7 @@ async def feishu_login(
     "/auth/token/refresh",
     response_model=UserInfo,
 )
-async def refresh_trust_token(
+def refresh_trust_token(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
 ):
@@ -124,7 +138,7 @@ async def refresh_trust_token(
     "/users",
     response_model=List[UserInfo],
 )
-async def get_users(
+def get_users(
     db: Session = Depends(database.get_db),
 ):
     users = db.query(models.User).order_by(models.User.name).all()

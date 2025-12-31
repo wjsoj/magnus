@@ -2,7 +2,6 @@
 import os
 import json
 import logging
-import asyncio
 from typing import List, Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,7 +10,7 @@ from sqlalchemy import or_
 
 from .. import database
 from .. import models
-from ..models import JobStatus, JobType
+from ..models import JobStatus
 from ..schemas import JobResponse, JobSubmission, PagedJobResponse
 from .._magnus_config import magnus_config
 from .._scheduler import scheduler
@@ -26,7 +25,7 @@ router = APIRouter()
     "/jobs/submit",
     response_model=JobResponse,
 )
-async def submit_job(
+def submit_job(
     job_data: JobSubmission,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -55,7 +54,7 @@ async def submit_job(
     "/jobs",
     response_model=PagedJobResponse,
 )
-async def get_jobs(
+def get_jobs(
     skip: int = 0,
     limit: int = 100,
     search: Optional[str] = None,
@@ -88,7 +87,7 @@ async def get_jobs(
     "/jobs/{job_id}",
     response_model=JobResponse,
 )
-async def get_job_detail(
+def get_job_detail(
     job_id: str,
     db: Session = Depends(database.get_db),
 ):
@@ -101,7 +100,7 @@ async def get_job_detail(
 @router.get(
     "/jobs/{job_id}/logs",
 )
-async def get_job_logs(
+def get_job_logs(
     job_id: str,
     db: Session = Depends(database.get_db),
 ):
@@ -109,7 +108,6 @@ async def get_job_logs(
     获取任务实时日志。
     为了防止内存溢出，限制最大读取 1MB。
     """
-    # 设定阈值：1MB
     MAX_LOG_SIZE = 1 * 1024 * 1024
 
     job = db.query(models.Job).filter(models.Job.id == job_id).first()
@@ -135,8 +133,8 @@ async def get_job_logs(
 
         # 情况 A: 文件过大，只读最后 1MB
         if file_size > MAX_LOG_SIZE:
-            with open(log_path, "rb") as f:  # 使用二进制模式以便 seek
-                f.seek(-MAX_LOG_SIZE, os.SEEK_END)  # 倒退 1MB
+            with open(log_path, "rb") as f:
+                f.seek(-MAX_LOG_SIZE, os.SEEK_END)
                 content_bytes = f.read()
                 content = content_bytes.decode("utf-8", errors="replace")
 
@@ -156,10 +154,10 @@ async def get_job_logs(
 @router.get(
     "/jobs/{job_id}/metrics",
 )
-async def get_job_metrics(
+def get_job_metrics(
     job_id: str,
     db: Session = Depends(database.get_db),
-)-> List[Dict[str, Any]]:
+) -> List[Dict[str, Any]]:
     latest_metric: Optional[models.JobMetric] = db.query(models.JobMetric)\
         .filter(models.JobMetric.job_id == job_id)\
         .order_by(models.JobMetric.timestamp.desc())\
@@ -170,7 +168,6 @@ async def get_job_metrics(
 
     try:
         metrics: List[Dict[str, Any]] = json.loads(latest_metric.status_json)
-        # 映射后端 utilization_gpu 到前端预期的 utilization 字段
         formatted_metrics = [
             {
                 "index": m.get("index"),
@@ -186,7 +183,7 @@ async def get_job_metrics(
 
 
 @router.post("/jobs/{job_id}/terminate")
-async def terminate_job(
+def terminate_job(
     job_id: str,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
@@ -203,11 +200,7 @@ async def terminate_job(
         raise HTTPException(status_code=403, detail="Not authorized to terminate this job")
 
     try:
-        await asyncio.to_thread(
-            scheduler.terminate_job,
-            db,
-            job,
-        )
+        scheduler.terminate_job(db, job)
     except Exception as e:
         logger.error(f"Error terminating job {job_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to terminate job")

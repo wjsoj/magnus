@@ -3,9 +3,10 @@ import httpx
 import logging
 import asyncio
 import socket
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 from collections import defaultdict
+from pydantic import BaseModel
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
@@ -14,6 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
 from .. import database
+from ..database import SessionLocal
 from .. import models
 from ..models import JobStatus, Service
 from ..schemas import ServiceResponse, ServiceCreate, PagedServiceResponse
@@ -24,57 +26,172 @@ from .auth import get_current_user
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# 防止同一服务的并发创建冲突 (检查-执行 竞态保护)
+# 防止同一服务的并发创建冲突
 _service_spawn_locks = defaultdict(asyncio.Lock)
 
 # 流量控制信号量字典
 _service_semaphores: Dict[str, asyncio.Semaphore] = {}
 
+# --- Pydantic 快照模型 ---
+class ServiceSnapshot(BaseModel):
+    id: str
+    max_concurrency: int
+    request_timeout: int
+    assigned_port: Optional[int] = None
+    entry_command: str
+    job_task_name: str
+    job_description: str
+    owner_id: str
+    namespace: str
+    repo_name: str
+    branch: str
+    commit_sha: str
+    gpu_count: int
+    gpu_type: str
+    # [Fix] 允许为空，与 SQLAlchemy Model 保持一致
+    cpu_count: Optional[int] = None
+    memory_demand: Optional[str] = None
+    runner: Optional[str] = None
+    job_type: str
 
-@router.post(
-    "/services",
-    response_model=ServiceResponse,
-)
-async def create_service(
+    class Config:
+        from_attributes = True
+
+# --- 同步辅助函数区 (自带 Session 生命周期) ---
+
+def _get_service_snapshot_standalone(service_id: str) -> ServiceSnapshot:
+    """独立的获取快照函数"""
+    with SessionLocal() as db:
+        service = db.query(Service).filter(Service.id == service_id).first()
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found")
+        if not service.is_active:
+            raise HTTPException(status_code=503, detail="Service is inactive")
+        
+        # Keep-Alive
+        service.last_activity_time = datetime.utcnow()
+        db.commit()
+        
+        # 转换为 Pydantic
+        return ServiceSnapshot.model_validate(service)
+
+def _try_revive_service_standalone(service_id: str) -> Tuple[str, int]:
+    """独立的拉起函数"""
+    with SessionLocal() as db:
+        service = db.query(Service).filter(Service.id == service_id).first()
+        if not service:
+            raise HTTPException(status_code=404, detail="Service not found (during revive)")
+            
+        current_job = service.current_job
+        
+        should_revive = False
+        if not current_job:
+            should_revive = True
+        elif current_job.status in [JobStatus.FAILED, JobStatus.TERMINATED, JobStatus.SUCCESS]:
+            should_revive = True
+        
+        # Path A: 不需要重启
+        if not should_revive:
+            if current_job is None or service.assigned_port is None:
+                raise HTTPException(status_code=500, detail="State Error: Service active but no job/port.")
+            return current_job.id, service.assigned_port
+
+        # Path B: 需要重启
+        try:
+            port = service_manager.allocate_port(db)
+
+            env_cmd = "\n".join([
+                f"export MAGNUS_PORT={port}",
+                service.entry_command,
+            ])
+
+            new_job = models.Job(
+                task_name=service.job_task_name,
+                description=service.job_description,
+                user_id=service.owner_id,
+                namespace=service.namespace,
+                repo_name=service.repo_name,
+                branch=service.branch,
+                commit_sha=service.commit_sha,
+                gpu_count=service.gpu_count,
+                gpu_type=service.gpu_type,
+                cpu_count=service.cpu_count,
+                memory_demand=service.memory_demand,
+                runner=service.runner,
+                entry_command=env_cmd,
+                status=JobStatus.PENDING,
+                job_type=service.job_type,
+            )
+
+            db.add(new_job)
+            db.flush()
+
+            service.current_job_id = new_job.id
+            service.assigned_port = port
+            db.commit()
+            
+            logger.info(f"Service {service.id} revived with Job {new_job.id} on port {port}")
+            return new_job.id, port
+
+        except Exception as e:
+            logger.error(f"Failed to revive service {service.id}: {e}")
+            raise HTTPException(status_code=500, detail=f"Service spawn failed: {e}")
+
+def _check_socket_sync(host: str, port: int, timeout: float = 0.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        return False
+
+def _refresh_status_standalone(job_id: str, service_id: str) -> str:
+    with SessionLocal() as db:
+        job = db.query(models.Job).filter(models.Job.id == job_id).first()
+        if not job:
+            return JobStatus.TERMINATED
+        
+        service = db.query(models.Service).filter(models.Service.id == service_id).first()
+        if service:
+            service.last_activity_time = datetime.utcnow()
+            db.commit()
+        
+        return job.status
+
+def _update_activity_standalone(service_id: str):
+    with SessionLocal() as db:
+        service = db.query(models.Service).filter(models.Service.id == service_id).first()
+        if service:
+            service.last_activity_time = datetime.utcnow()
+            db.commit()
+
+# --- API 路由区 ---
+
+@router.post("/services", response_model=ServiceResponse)
+def create_service(
     service_data: ServiceCreate,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
 ) -> models.Service:
-    """
-    创建或更新 Service (Upsert)。
-    """
-    # 1. 检查 ID 是否冲突
     existing = db.query(Service).filter(Service.id == service_data.id).first()
     data = service_data.model_dump()
 
     if existing:
-        # 权限检查
         if existing.owner_id != current_user.id:
-            raise HTTPException(
-                status_code=403, 
-                detail="You cannot modify a service created by another user."
-            )
-
-        # 信号量重置逻辑：如果修改了最大并发数
+            raise HTTPException(status_code=403, detail="You cannot modify a service created by another user.")
+        
         if service_data.max_concurrency != existing.max_concurrency:
             if existing.id in _service_semaphores:
                 del _service_semaphores[existing.id]
                 logger.info(f"Concurrency limit changed for {existing.id}, semaphore reset.")
 
-        # Update existing
         for k, v in data.items():
             setattr(existing, k, v)
-
         existing.owner_id = current_user.id
-        
-        # [Magnus Update] 配置变更，刷新 updated_at
         existing.updated_at = datetime.utcnow()
-        
         db.commit()
         db.refresh(existing)
         return existing
 
-    # Create new
     data["is_active"] = False
     new_service = Service(
         **data,
@@ -89,19 +206,14 @@ async def create_service(
 
 
 @router.delete("/services/{service_id}")
-async def delete_service(
+def delete_service(
     service_id: str,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    """
-    删除服务。仅拥有者可操作。
-    """
     svc = db.query(Service).filter(Service.id == service_id).first()
-
     if not svc:
         raise HTTPException(status_code=404, detail="Service not found")
-
     if svc.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="You do not have permission to delete this service")
 
@@ -114,56 +226,40 @@ async def delete_service(
     return {"message": "Service deleted successfully"}
 
 
-@router.get(
-    "/services",
-    response_model=PagedServiceResponse,
-)
-async def list_services(
+@router.get("/services", response_model=PagedServiceResponse)
+def list_services(
     skip: int = 0,
     limit: int = 20,
     search: Optional[str] = None,
     owner_id: Optional[str] = None,
-    # [Magnus Update] 新增筛选：只看活跃
     active_only: bool = False,
-    # [Magnus Update] 新增排序：activity (默认) | updated
     sort_by: str = Query("activity", regex="^(activity|updated)$"),
     db: Session = Depends(database.get_db)
 ) -> Dict[str, Any]:
-    """
-    获取服务列表（支持分页、搜索、筛选、排序）
-    """
     query = db.query(models.Service)
 
-    # 1. 搜索逻辑
     if search:
         search_pattern = f"%{search}%"
-        query = query.filter(
-            or_(
-                models.Service.name.ilike(search_pattern),
-                models.Service.id.ilike(search_pattern),
-                models.Service.description.ilike(search_pattern),
-            )
-        )
+        query = query.filter(or_(
+            models.Service.name.ilike(search_pattern),
+            models.Service.id.ilike(search_pattern),
+            models.Service.description.ilike(search_pattern),
+        ))
 
-    # 2. 用户筛选
     if owner_id and owner_id != "all":
         query = query.filter(models.Service.owner_id == owner_id)
 
-    # 3. 活跃状态筛选 [Magnus Update]
     if active_only:
         query = query.filter(models.Service.is_active == True)
 
     total = query.count()
 
-    # 4. 排序逻辑 [Magnus Update]
     if sort_by == "updated":
         query = query.order_by(models.Service.updated_at.desc())
     else:
-        # Default: activity
         query = query.order_by(models.Service.last_activity_time.desc())
 
     items = query.offset(skip).limit(limit).all()
-
     return {"total": total, "items": items}
 
 
@@ -175,29 +271,20 @@ async def proxy_service_request(
     service_id: str,
     path: str,
     request: Request,
-    db: Session = Depends(database.get_db)
 ) -> StreamingResponse:
+    
     # 1. 基础检查
-    service = db.query(Service).filter(Service.id == service_id).first()
-    if not service:
-        raise HTTPException(status_code=404, detail="Service not found")
-
-    if not service.is_active:
-        raise HTTPException(status_code=503, detail="Service is inactive")
-
-    # [Magnus Update] Keep-Alive: 只更新活跃时间，不碰 updated_at
-    service.last_activity_time = datetime.utcnow()
-    db.commit()
+    service_snap = await asyncio.to_thread(_get_service_snapshot_standalone, service_id)
 
     # 2. 获取或创建信号量
-    if service.id not in _service_semaphores:
-        _service_semaphores[service.id] = asyncio.Semaphore(service.max_concurrency)
+    if service_snap.id not in _service_semaphores:
+        _service_semaphores[service_snap.id] = asyncio.Semaphore(service_snap.max_concurrency)
 
-    sem = _service_semaphores[service.id]
+    sem = _service_semaphores[service_snap.id]
 
     # 3. SLA 控制
     start_time = datetime.utcnow()
-    total_budget = service.request_timeout
+    total_budget = service_snap.request_timeout
 
     def get_remaining_time() -> float:
         elapsed = (datetime.utcnow() - start_time).total_seconds()
@@ -209,7 +296,7 @@ async def proxy_service_request(
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=429,
-            detail=f"Service is busy (Max concurrency {service.max_concurrency} reached)."
+            detail=f"Service is busy (Max concurrency {service_snap.max_concurrency} reached)."
         )
 
     try:
@@ -220,84 +307,37 @@ async def proxy_service_request(
             raise HTTPException(status_code=504, detail="Timeout while waiting for concurrency slot")
 
         async with _service_spawn_locks[service_id]:
-            db.refresh(service)
-            current_job = service.current_job
-
-            should_revive = False
-            if not current_job:
-                should_revive = True
-            elif current_job.status in [JobStatus.FAILED, JobStatus.TERMINATED, JobStatus.SUCCESS]:
-                should_revive = True
-
-            if should_revive:
-                try:
-                    port = service_manager.allocate_port(db)
-
-                    env_cmd = "\n".join([
-                        f"export MAGNUS_PORT={port}",
-                        service.entry_command,
-                    ])
-
-                    new_job = models.Job(
-                        task_name=service.job_task_name,
-                        description=service.job_description,
-                        user_id=service.owner_id,
-                        namespace=service.namespace,
-                        repo_name=service.repo_name,
-                        branch=service.branch,
-                        commit_sha=service.commit_sha,
-                        gpu_count=service.gpu_count,
-                        gpu_type=service.gpu_type,
-                        cpu_count=service.cpu_count,
-                        memory_demand=service.memory_demand,
-                        runner=service.runner,
-                        entry_command=env_cmd,
-                        status=JobStatus.PENDING,
-                        job_type=service.job_type,
-                    )
-
-                    db.add(new_job)
-                    db.flush()
-
-                    service.current_job_id = new_job.id
-                    service.assigned_port = port
-                    db.commit()
-
-                    current_job = new_job
-                    logger.info(f"Service {service.id} revived with Job {new_job.id} on port {port}")
-
-                except Exception as e:
-                    logger.error(f"Failed to revive service {service.id}: {e}")
-                    raise HTTPException(status_code=500, detail=f"Service spawn failed: {e}")
+            current_job_id, assigned_port = await asyncio.to_thread(
+                _try_revive_service_standalone, service_id
+            )
+            service_snap.assigned_port = assigned_port
 
         # 6. 等待就绪 (Wait Logic)
         is_ready = False
 
         while get_remaining_time() > 0:
-            db.refresh(current_job)
+            job_status = await asyncio.to_thread(_refresh_status_standalone, current_job_id, service_id)
 
-            if current_job.status in [JobStatus.FAILED, JobStatus.TERMINATED]:
+            if job_status in [JobStatus.FAILED, JobStatus.TERMINATED]:
                 raise HTTPException(status_code=502, detail="Service job failed during startup")
 
-            if current_job.status in [JobStatus.PENDING, JobStatus.PAUSED]:
-                # [Magnus Update] 等待期间也刷新活跃时间，防止被 Service Manager 误杀
-                service.last_activity_time = datetime.utcnow()
-                db.commit()
+            if job_status in [JobStatus.PENDING, JobStatus.PAUSED]:
                 await asyncio.sleep(1)
                 continue
 
-            if current_job.status == JobStatus.RUNNING:
-                if not service.assigned_port:
+            if job_status == JobStatus.RUNNING:
+                if not service_snap.assigned_port:
                     await asyncio.sleep(1)
                     continue
 
-                try:
-                    with socket.create_connection(("127.0.0.1", service.assigned_port), timeout=0.5):
-                        is_ready = True
-                        break
-                except (ConnectionRefusedError, socket.timeout, OSError):
-                    service.last_activity_time = datetime.utcnow()
-                    db.commit()
+                socket_ok = await asyncio.to_thread(
+                    _check_socket_sync, "127.0.0.1", service_snap.assigned_port
+                )
+                
+                if socket_ok:
+                    is_ready = True
+                    break
+                else:
                     await asyncio.sleep(1)
                     continue
 
@@ -317,7 +357,7 @@ async def proxy_service_request(
         )
 
         client = httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{service.assigned_port}",
+            base_url=f"http://127.0.0.1:{service_snap.assigned_port}",
             timeout=proxy_timeout,
             follow_redirects=True,
         )
@@ -332,9 +372,7 @@ async def proxy_service_request(
                 params=request.query_params,
             )
 
-            # [Magnus Update] 转发前再次刷新活跃时间
-            service.last_activity_time = datetime.utcnow()
-            db.commit()
+            await asyncio.to_thread(_update_activity_standalone, service_id)
 
             r = await client.send(rp_req, stream=True)
 
@@ -350,7 +388,7 @@ async def proxy_service_request(
             raise HTTPException(status_code=502, detail="Service running but connection failed.")
         except Exception as e:
             await client.aclose()
-            logger.error(f"Proxy error for {service.id}: {e}")
+            logger.error(f"Proxy error for {service_id}: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     finally:

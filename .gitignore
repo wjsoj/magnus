@@ -30,6 +30,7 @@ back_end/run*.py
 back_end/run*.sh
 back_end/!scripts/**
 back_end/scripts/**/**__pycache__**
+back_end/api_keys.json
 
 
 # Others

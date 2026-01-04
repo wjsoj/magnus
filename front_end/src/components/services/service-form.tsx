@@ -315,7 +315,7 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
                   min={10}
                   max={3600} // An Hour
                 />
-                 <p className="text-[11px] text-zinc-500 mt-2">Total Handling Timeout</p>
+                 <p className="text-[11px] text-zinc-500 mt-2">Total Handling Timeout.</p>
             </div>
             <div>
                 <NumberStepper 
@@ -325,7 +325,7 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
                   min={1}
                   max={1000}
                 />
-                <p className="text-[11px] text-zinc-500 mt-2">Max In-flight Requests</p>
+                <p className="text-[11px] text-zinc-500 mt-2">Max In-flight Requests.</p>
             </div>
          </div>
       </div>

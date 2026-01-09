@@ -175,6 +175,23 @@ def _check_socket_sync(host: str, port: int, timeout: float = 0.5) -> bool:
             return True
     except (ConnectionRefusedError, socket.timeout, OSError):
         return False
+    
+    
+async def _check_http_readiness(port: int) -> bool:
+
+    url = f"http://127.0.0.1:{port}/health"
+    short_time = 1.0
+    try:
+        async with httpx.AsyncClient(timeout=short_time) as client:
+            # 不强制要求服务实现 /health
+            # 但是，服务如果实现了 /health，这里 ok 应该意味着可以转发
+            # 如果没有实现，这里可以 get 到一个 404 的 response
+            await client.get(url)
+        return True
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout):
+        return False
+    except Exception:
+        return False
 
 
 def _refresh_status_standalone(job_id: str, service_id: str) -> str:
@@ -393,8 +410,9 @@ async def proxy_service_request(
                 )
 
                 if socket_ok:
-                    is_ready = True
-                    break
+                    if await _check_http_readiness(service_snap.assigned_port):
+                        is_ready = True
+                        break
                 else:
                     await asyncio.sleep(1)
                     continue

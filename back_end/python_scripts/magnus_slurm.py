@@ -103,7 +103,7 @@ set -e
             print(f"[Magnus] Job failed with exit code: {return_code}")
             sys.exit(return_code)
         
-        print(f"[Magnus] Job completed successfully. Log saved to {out_path}")
+        print(f"[Magnus] Job completed successfully. Log also saved to {out_path}")
 
     except Exception as e:
         print(f"[Magnus] Critical Error: {str(e)}")

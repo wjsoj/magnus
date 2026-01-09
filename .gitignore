@@ -38,6 +38,7 @@ back_end/python_scripts/run*.py
 *nohup*
 *slurm*
 !back_end/python_scripts/blueprints/magnus-slurm.py
+!back_end/python_scripts/magnus_slurm.py
 documents/
 .DS_Store
 .vscode/

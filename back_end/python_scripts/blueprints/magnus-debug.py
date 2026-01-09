@@ -26,7 +26,7 @@ def generate_job(
     user_name: UserName,
     gpu_count: GpuCount = 1,
     timeout: Timeout = "infinity",
-) -> JobSubmission:
+)-> JobSubmission:
     
     timeout_value = timeout.strip().lower()
     

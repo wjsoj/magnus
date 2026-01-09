@@ -141,21 +141,21 @@ def _try_revive_service_standalone(service_id: str) -> Tuple[str, int]:
             ])
 
             new_job = models.Job(
-                task_name=service.job_task_name,
-                description=service.job_description,
-                user_id=service.owner_id,
-                namespace=service.namespace,
-                repo_name=service.repo_name,
-                branch=service.branch,
-                commit_sha=service.commit_sha,
-                gpu_count=service.gpu_count,
-                gpu_type=service.gpu_type,
-                cpu_count=service.cpu_count,
-                memory_demand=service.memory_demand,
-                runner=service.runner,
-                entry_command=env_cmd,
-                status=JobStatus.PENDING,
-                job_type=service.job_type,
+                task_name = service.job_task_name,
+                description = service.job_description,
+                user_id = service.owner_id,
+                namespace = service.namespace,
+                repo_name = service.repo_name,
+                branch = service.branch,
+                commit_sha = service.commit_sha,
+                gpu_count = service.gpu_count,
+                gpu_type = service.gpu_type,
+                cpu_count = service.cpu_count,
+                memory_demand = service.memory_demand,
+                runner = service.runner,
+                entry_command = env_cmd,
+                status = JobStatus.PENDING,
+                job_type = service.job_type,
             )
 
             db.add(new_job)
@@ -190,7 +190,8 @@ async def _check_http_readiness(port: int) -> bool:
             # 不强制要求服务实现 /health
             # 但是，服务如果实现了 /health，这里 ok 应该意味着可以转发
             # 如果没有实现，这里可以 get 到一个 404 的 response
-            await client.get(url)
+            response = await client.get(url)
+            if response.status_code >= 500: return False
         return True
     except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout):
         return False

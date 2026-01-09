@@ -31,12 +31,13 @@ async def execute_mathematica(
     
     transport = StreamableHttpTransport(url=url)
     
-    async with Client(transport) as client:
+    client = Client(transport, timeout=300)
+    async with client:
         
         target_tool = "execute_mathematica"
         result = await client.call_tool(
             name = target_tool,
-            arguments = {"code": code}
+            arguments = {"code": code},
         )
         
         output = ""

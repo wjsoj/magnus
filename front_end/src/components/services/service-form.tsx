@@ -7,11 +7,16 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NumberStepper } from "@/components/ui/number-stepper";
 import { client } from "@/lib/api";
 import { Service } from "@/types/service";
-
-const MAX_GPU_COUNT = 3;
+import { 
+  PHYSICAL_GPUS, 
+  getGpuLimit, 
+  MAX_CPU_COUNT, 
+  DEFAULT_MEMORY, 
+  DEFAULT_RUNNER 
+} from "@/lib/config";
 
 const GPU_TYPES = [
-  { label: "NVIDIA GeForce RTX 5090", value: "rtx5090", meta: "32GB • Blackwell" },
+  ...PHYSICAL_GPUS,
   { label: "CPU Only", value: "cpu", meta: "Host Memory" },
 ];
 
@@ -88,7 +93,9 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
   
   // === Resources ===
   const [gpuCount, setGpuCount] = useState(data?.gpu_count ?? 1);
-  const [gpuType, setGpuType] = useState(data?.gpu_type || "rtx5090"); 
+  const [gpuType, setGpuType] = useState(
+    data?.gpu_type || (data?.gpu_count === 0 ? "cpu" : PHYSICAL_GPUS[0].value)
+  ); 
   const [jobType, setJobType] = useState(data?.job_type || "A2");
 
   // === UI States ===
@@ -131,7 +138,13 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
 
   const handleGpuTypeChange = (val: string) => {
     setGpuType(val);
-    if (val === 'cpu') { setGpuCount(0); } else { if (gpuCount === 0) setGpuCount(1); }
+    if (val === 'cpu') { 
+        setGpuCount(0); 
+    } else { 
+        if (gpuCount === 0) setGpuCount(1);
+        const limit = getGpuLimit(val);
+        if (gpuCount > limit) setGpuCount(limit);
+    }
   };
 
   const clearError = (field: string) => { if (errorField === field) { setErrorField(null); setErrorMessage(null); } };
@@ -209,7 +222,6 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
     };
     
     try {
-      // [Magnus Update] Unified POST request (Upsert logic handled by backend)
       await client("/api/services", { 
           method: "POST",
           json: payload 
@@ -217,7 +229,6 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
       onSuccess(); 
     } catch (e: any) {
       setErrorMessage(e.message || "Save Failed");
-      // 简单的 shake 效果反馈
       const id = isOriginalId ? "btn-update" : "btn-create";
       const btn = document.getElementById(id);
       if (btn) {
@@ -227,7 +238,6 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
     }
   };
 
-  // Determine if we are strictly updating the same resource (for UI feedback only)
   const isOriginalId = initialData && initialData.id === serviceId;
 
   const inputClass = (isError: boolean) => `
@@ -431,8 +441,8 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
                 label="GPU Count" 
                 value={gpuCount} 
                 onChange={setGpuCount} 
-                min={0} 
-                max={MAX_GPU_COUNT} 
+                min={0}
+                max={getGpuLimit(gpuType)}
                 disabled={gpuType === 'cpu'} 
             />
          </div>
@@ -449,16 +459,32 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
           {showAdvanced && (
             <div className="mt-3 pl-1 grid grid-cols-1 sm:grid-cols-2 gap-4 animate-in slide-in-from-top-1 duration-200">
                 <div>
-                    <NumberStepper label="CPU Cores" value={cpuCount} onChange={setCpuCount} min={0} max={64} />
+                    <NumberStepper 
+                      label="CPU Cores" 
+                      value={cpuCount} 
+                      onChange={setCpuCount} 
+                      min={0}
+                      max={MAX_CPU_COUNT} 
+                    />
                     <p className="text-[11px] text-zinc-500 mt-1.5 ml-0.5">Set to <span className="text-zinc-400 font-mono">0</span> to use default.</p>
                 </div>
                 <div>
                      <label className="text-xs uppercase tracking-wider mb-1.5 block font-medium text-zinc-500">Memory</label>
-                     <input className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm focus:border-blue-500 outline-none transition-all placeholder-zinc-700" value={memoryDemand} onChange={e => setMemoryDemand(e.target.value)} placeholder="Default: 1600M" />
+                     <input 
+                       className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm focus:border-blue-500 outline-none transition-all placeholder-zinc-700" 
+                       value={memoryDemand} 
+                       onChange={e => setMemoryDemand(e.target.value)}
+                       placeholder={`Default: ${DEFAULT_MEMORY}`}
+                     />
                 </div>
                 <div className="sm:col-span-2">
                      <label className="text-xs uppercase tracking-wider mb-1.5 block font-medium text-zinc-500">Run As User</label>
-                     <input className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm font-mono focus:border-blue-500 outline-none transition-all placeholder-zinc-700" value={runner} onChange={e => setRunner(e.target.value)} placeholder="Default: magnus" />
+                     <input 
+                       className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm font-mono focus:border-blue-500 outline-none transition-all placeholder-zinc-700" 
+                       value={runner} 
+                       onChange={e => setRunner(e.target.value)}
+                       placeholder={`Default: ${DEFAULT_RUNNER}`}
+                     />
                 </div>
             </div>
           )}
@@ -505,7 +531,6 @@ export default function ServiceForm({ initialData, onCancel, onSuccess }: Servic
                 onClick={handleSave} 
                 className="flex-1 sm:flex-none px-6 py-2.5 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/20 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
-                {/* 按钮文字依然可以保留逻辑区分，提升体验 */}
                 {isOriginalId ? "📡 Update Service" : (initialData ? "📡 Clone Service" : "📡 Create Service")}
             </button>
         </div>

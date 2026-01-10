@@ -8,6 +8,7 @@ import { client } from "@/lib/api";
 import { NotificationsPopover } from "./notifications-popover";
 import { CopyableText } from "@/components/ui/copyable-text";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { CLUSTER_CONFIG } from "@/lib/config";
 
 export function Header() {
   const { user, isLoading } = useAuth();
@@ -83,7 +84,7 @@ export function Header() {
                   {user.name}
                 </div>
                 <div className="text-xs text-zinc-500 font-mono">
-                  {user.email || "PKU-PHY"}
+                  {user.email || CLUSTER_CONFIG.name}
                 </div>
               </div>
               

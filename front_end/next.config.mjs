@@ -21,6 +21,7 @@ const nextConfig = {
     NEXT_PUBLIC_FEISHU_APP_ID: magnusConfig.server.feishu_client.app_id,
     NEXT_PUBLIC_POLL_INTERVAL: magnusConfig.client.jobs.poll_interval.toString(),
     NEXT_PUBLIC_SERVER_PUBLIC_IP: magnusConfig.server.public_ip,
+    NEXT_PUBLIC_CLUSTER_CONFIG: JSON.stringify(magnusConfig.cluster),
   },
   allowedDevOrigins: [
     `localhost:${magnusConfig.server.front_end_port}`,

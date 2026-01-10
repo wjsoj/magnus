@@ -16,6 +16,7 @@ import {
   Wrench 
 } from "lucide-react";
 import { useAuth } from "@/context/auth-context"; 
+import { CLUSTER_CONFIG } from "@/lib/config";
 
 const NAV_ITEMS = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -115,7 +116,7 @@ export function Sidebar() {
         </div>
 
         <div className="px-2 pb-1 text-[10px] tracking-wider text-zinc-600 flex justify-between items-center font-medium">
-          <span>PKU-PHY</span>
+          <span>{CLUSTER_CONFIG.name}</span>
           <div className="flex items-center gap-1.5">
             <Server className="w-3 h-3" />
             <span>v0.1.0</span>

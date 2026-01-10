@@ -5,12 +5,16 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { NumberStepper } from "@/components/ui/number-stepper";
-import { client } from "@/lib/api"; 
-
-const MAX_GPU_COUNT = 3;
-
+import { client } from "@/lib/api";
+import { 
+  PHYSICAL_GPUS, 
+  getGpuLimit, 
+  MAX_CPU_COUNT, 
+  DEFAULT_MEMORY, 
+  DEFAULT_RUNNER 
+} from "@/lib/config";
 const GPU_TYPES = [
-  { label: "NVIDIA GeForce RTX 5090", value: "rtx5090", meta: "32GB • Blackwell" },
+  ...PHYSICAL_GPUS,
   { label: "CPU Only", value: "cpu", meta: "Host Memory" },
 ];
 
@@ -63,7 +67,7 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
   // 0 GPU 强制设为 CPU 类型
   const [gpuCount, setGpuCount] = useState(initialData?.gpu_count ?? 1);
   const [gpuType, setGpuType] = useState(
-    initialData?.gpu_type || (initialData?.gpu_count === 0 ? "cpu" : "")
+    initialData?.gpu_type || (initialData?.gpu_count === 0 ? "cpu" : PHYSICAL_GPUS[0].value)
   ); 
   
   const [jobType, setJobType] = useState(initialData?.job_type || "A2");
@@ -105,6 +109,8 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
         setGpuCount(0);
     } else {
         if (gpuCount === 0) setGpuCount(1);
+        const limit = getGpuLimit(val);
+        if (gpuCount > limit) setGpuCount(limit);
     }
   };
 
@@ -283,8 +289,8 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
         >
             {loading ? (
                 <>
-                 <span className="w-4 h-4 border-2 border-zinc-500 border-t-white rounded-full animate-spin"></span>
-                 Scanning...
+                  <span className="w-4 h-4 border-2 border-zinc-500 border-t-white rounded-full animate-spin"></span>
+                  Scanning...
                 </>
             ) : "Scan Repository"}
         </button>
@@ -343,7 +349,7 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
                 value={gpuCount} 
                 onChange={setGpuCount} 
                 min={0}
-                max={MAX_GPU_COUNT}
+                max={getGpuLimit(gpuType)}
                 disabled={gpuType === 'cpu'} 
             />
         </div>
@@ -372,7 +378,7 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
                   value={cpuCount} 
                   onChange={setCpuCount}
                   min={0}
-                  max={128}
+                  max={MAX_CPU_COUNT}
                 />
                 <p className="text-[11px] text-zinc-500 mt-1.5 ml-0.5">
                   Set to <span className="text-zinc-400 font-mono">0</span> to use partition default.
@@ -387,8 +393,8 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
                 <input 
                   type="text"
                   className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm focus:border-blue-500 outline-none transition-all placeholder-zinc-700"
-                  value={memoryDemand} 
-                  placeholder="Default: 1600M"
+                  value={memoryDemand}
+                  placeholder={`Default: ${DEFAULT_MEMORY}`}
                   onChange={e => setMemoryDemand(e.target.value)} 
                 />
               </div>
@@ -402,8 +408,8 @@ export default function JobForm({ mode, initialData, onCancel, onSuccess }: JobF
                     <input 
                     type="text"
                     className="w-full bg-zinc-950 border border-zinc-800 px-3 py-2.5 rounded-lg text-white text-sm focus:border-blue-500 outline-none transition-all placeholder-zinc-700 font-mono"
-                    value={runner} 
-                    placeholder="Default: magnus"
+                    value={runner}
+                    placeholder={`Default: ${DEFAULT_RUNNER}`}
                     onChange={e => setRunner(e.target.value)} 
                   />
                 </div>

@@ -3,12 +3,13 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/auth-context";
+import { CLUSTER_CONFIG } from "@/lib/config";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "Magnus Platform",
-  description: "PKU-PHY Infrastructure",
+  description: `${CLUSTER_CONFIG.name} Infrastructure`,
 };
 
 export default function RootLayout({

@@ -1,5 +1,5 @@
 # back_end/server/schemas.py
-from typing import Any, List, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
 from .models import JobType, JobStatus
@@ -23,6 +23,8 @@ __all__ = [
     "ServiceCreate",
     "ServiceResponse",
     "PagedServiceResponse",
+    "BlueprintPreferenceUpdate",
+    "BlueprintPreferenceResponse",
 ]
 
 
@@ -154,6 +156,19 @@ class BlueprintParamSchema(BaseModel):
     color: Optional[str] = None
     border_color: Optional[str] = None
     options: Optional[List[BlueprintParamOption]] = None
+    
+    
+class BlueprintPreferenceUpdate(BaseModel):
+    blueprint_id: str
+    blueprint_hash: str
+    cached_params: Dict[str, Any]
+
+
+class BlueprintPreferenceResponse(BaseModel):
+    blueprint_id: str
+    blueprint_hash: str
+    cached_params: Dict[str, Any]
+    updated_at: datetime
     
     
 class ServiceCreate(BaseModel):

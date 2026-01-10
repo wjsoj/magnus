@@ -16,6 +16,7 @@ __all__ = [
     "ClusterSnapshot",
     "Blueprint",
     "Service",
+    "BlueprintUserPreference",
 ]
 
 
@@ -140,3 +141,13 @@ class Service(Base):
     memory_demand: Mapped[str | None] = mapped_column(String, nullable=True)
     runner: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    
+    
+class BlueprintUserPreference(Base):
+    __tablename__ = "blueprint_user_preferences"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), index=True)
+    blueprint_id: Mapped[str] = mapped_column(String, ForeignKey("blueprints.id"), index=True)
+    blueprint_hash: Mapped[str] = mapped_column(String) 
+    cached_params: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

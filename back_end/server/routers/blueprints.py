@@ -9,9 +9,17 @@ from sqlalchemy import or_
 
 from .. import database
 from .. import models
-from ..schemas import BlueprintResponse, BlueprintCreate, PagedBlueprintResponse, BlueprintParamSchema
+from ..schemas import (
+    BlueprintResponse, 
+    BlueprintCreate, 
+    PagedBlueprintResponse, 
+    BlueprintParamSchema,
+    BlueprintPreferenceUpdate,
+    BlueprintPreferenceResponse,
+)
 from .._blueprint_manager import blueprint_manager
 from .auth import get_current_user
+from library import *
 
 
 logger = logging.getLogger(__name__)
@@ -183,3 +191,107 @@ def run_blueprint(
     except Exception as e:
         logger.error(f"Blueprint run failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+    
+    
+@router.get(
+    "/blueprints/{blueprint_id}/preference",
+    response_model=BlueprintPreferenceResponse,
+)
+def get_blueprint_preference(
+    blueprint_id: str,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    pref = db.query(models.BlueprintUserPreference).filter(
+        models.BlueprintUserPreference.user_id == current_user.id,
+        models.BlueprintUserPreference.blueprint_id == blueprint_id,
+    ).first()
+    
+    if not pref:
+        raise HTTPException(status_code=404, detail="No preference found")
+        
+    return BlueprintPreferenceResponse(
+        blueprint_id=pref.blueprint_id,
+        blueprint_hash=pref.blueprint_hash,
+        cached_params=deserialize_json(pref.cached_params),
+        updated_at=pref.updated_at,
+    )
+    
+    
+def _compute_signature_hash(code: str) -> str:
+    try:
+        schema_objs = blueprint_manager.analyze_signature(code)
+        schema_dicts = []
+        for s in schema_objs:
+            if hasattr(s, "model_dump"):
+                schema_dicts.append(s.model_dump())
+            elif hasattr(s, "dict"):
+                schema_dicts.append(s.dict()) # 兼容旧版 Pydantic
+            elif isinstance(s, dict):
+                schema_dicts.append(s)
+            else:
+                schema_dicts.append(str(s)) # 兜底
+
+        # 紧凑格式 Canonical JSON，匹配前端
+        canonical_json = json.dumps(
+            schema_dicts, 
+            sort_keys=True, 
+            separators=(',', ':') 
+        )
+        
+        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        
+    except Exception as e:
+        logger.error(f"❌ Hash computation failed: {e}")
+        logger.error(traceback.format_exc())
+        return "invalid_signature"
+
+
+@router.put(
+    "/blueprints/{blueprint_id}/preference",
+    response_model=BlueprintPreferenceResponse,
+)
+def save_blueprint_preference(
+    blueprint_id: str,
+    pref_update: BlueprintPreferenceUpdate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    bp = db.query(models.Blueprint).filter(models.Blueprint.id == blueprint_id).first()
+    if not bp:
+        raise HTTPException(status_code=404, detail="Blueprint not found")
+        
+    if pref_update.blueprint_id != blueprint_id:
+         raise HTTPException(status_code=400, detail="Blueprint ID mismatch")
+
+    current_hash = _compute_signature_hash(bp.code)
+
+    pref = db.query(models.BlueprintUserPreference).filter(
+        models.BlueprintUserPreference.user_id == current_user.id,
+        models.BlueprintUserPreference.blueprint_id == blueprint_id,
+    ).first()
+    
+    serialized_params = serialize_json(pref_update.cached_params)
+    
+    if pref: # Update
+        pref.blueprint_hash = current_hash
+        pref.cached_params = serialized_params
+        pref.updated_at = datetime.utcnow()
+    else: # Create
+        pref = models.BlueprintUserPreference(
+            user_id=current_user.id,
+            blueprint_id=blueprint_id,
+            blueprint_hash=current_hash,
+            cached_params=serialized_params,
+        )
+        db.add(pref)
+    
+    db.commit()
+    db.refresh(pref)
+    
+    return BlueprintPreferenceResponse(
+        blueprint_id=pref.blueprint_id,
+        blueprint_hash=pref.blueprint_hash,
+        cached_params=deserialize_json(pref.cached_params),
+        updated_at=pref.updated_at,
+    )

@@ -1,13 +1,14 @@
-// front_end/src/components/blueprints/blueprint-runner.tsx
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Terminal, Loader2, Play } from "lucide-react";
 import { client } from "@/lib/api";
 import { Drawer } from "@/components/ui/drawer";
 import { DynamicForm } from "@/components/ui/dynamic-form";
 import { FieldSchema } from "@/components/ui/dynamic-form/types";
+import { BlueprintPreference } from "@/types/blueprint";
+import { computeStableHash } from "@/lib/utils";
 
 interface BlueprintRunnerProps {
   blueprint: { id: string; title: string } | null;
@@ -16,40 +17,76 @@ interface BlueprintRunnerProps {
 
 export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
   const router = useRouter();
-  
+
   const [paramsSchema, setParamsSchema] = useState<FieldSchema[]>([]);
   const [formValues, setFormValues] = useState<Record<string, any>>({});
-  
+
   const [isLoadingSchema, setIsLoadingSchema] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
 
   const [errorField, setErrorField] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const currentHashRef = useRef<string>("");
+
   useEffect(() => {
     if (blueprint?.id) {
-      let isMounted = true; 
+      let isMounted = true;
 
-      const fetchSchema = async () => {
+      const initialize = async () => {
         setIsLoadingSchema(true);
         setParamsSchema([]);
         setErrorField(null);
         setErrorMessage(null);
+        setFormValues({});
+        currentHashRef.current = "";
 
         try {
-          const schema = await client(`/api/blueprints/${blueprint.id}/schema`);
+          const results = await Promise.allSettled([
+            client(`/api/blueprints/${blueprint.id}/schema`),
+            client(`/api/blueprints/${blueprint.id}/preference`, { cache: "no-store" })
+          ]);
 
-          if (isMounted) {
-            setParamsSchema(schema);
-            const initial: Record<string, any> = {};
-            schema.forEach((p: FieldSchema) => {
-              initial[p.key] = p.default ?? "";
-            });
-            setFormValues(initial);
+          if (!isMounted) return;
+          const schemaResult = results[0];
+          if (schemaResult.status === "rejected") {
+            throw new Error(schemaResult.reason.message || "Failed to fetch schema");
           }
-        } catch (e) {
+          const schema = schemaResult.value;
+          if (!Array.isArray(schema)) {
+            throw new Error("Invalid schema format");
+          }
+
+          // 处理 Preference 时允许 404
+          let preference: BlueprintPreference | null = null;
+          const prefResult = results[1];
+          if (prefResult.status === "fulfilled") {
+            preference = prefResult.value as BlueprintPreference;
+          }
+
+          const signatureHash = await computeStableHash(schema);
+          currentHashRef.current = signatureHash;
+          setParamsSchema(schema);
+          
+          const initial: Record<string, any> = {};
+          
+          // 仅当 Hash 匹配时使用缓存
+          const useCache = preference && preference.blueprint_hash === signatureHash;
+
+          schema.forEach((p: FieldSchema) => {
+            if (useCache && preference!.cached_params[p.key] !== undefined) {
+              initial[p.key] = preference!.cached_params[p.key];
+            } else {
+              initial[p.key] = p.default ?? "";
+            }
+          });
+
+          setFormValues(initial);
+
+        } catch (e: any) {
           if (isMounted) {
-            alert("Failed to parse blueprint schema.");
+            console.error("Blueprint initialization failed:", e);
+            alert(`Failed to load blueprint: ${e.message}`);
             onClose();
           }
         } finally {
@@ -57,15 +94,13 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
         }
       };
 
-      fetchSchema();
-
+      initialize();
       return () => { isMounted = false; };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blueprint?.id]);
 
   const scrollToError = (key: string) => {
-    // 给予微小的延时，确保 DynamicForm 内部的 useEffect 已经处理完 Scope 的展开渲染
     setTimeout(() => {
       const el = document.getElementById(`field-${key}`);
       if (el) {
@@ -81,13 +116,11 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
     setErrorMessage(null);
 
     for (const param of paramsSchema) {
-      // 仅检查 text 类型且明确标记 allow_empty 为 false 的字段
       if (param.type === 'text' && param.allow_empty === false) {
         const val = formValues[param.key];
         if (!val || (typeof val === 'string' && !val.trim())) {
-          const label = param.label || param.key;
           setErrorField(param.key);
-          setErrorMessage(`⚠️ ${label} is required`);
+          setErrorMessage(`⚠️ ${param.label || param.key} is required`);
           scrollToError(param.key);
           return;
         }
@@ -96,7 +129,22 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
 
     setIsRunning(true);
     try {
-      await client(`/api/blueprints/${blueprint.id}/run`, { method: "POST", json: formValues });
+      await client(`/api/blueprints/${blueprint.id}/run`, {
+        method: "POST",
+        json: formValues
+      });
+      
+      if (currentHashRef.current) {
+        client(`/api/blueprints/${blueprint.id}/preference`, {
+          method: "PUT",
+          json: {
+            blueprint_id: blueprint.id,
+            blueprint_hash: currentHashRef.current,
+            cached_params: formValues,
+          }
+        }).catch(err => console.warn("Failed to save preference:", err));
+      }
+
       router.push('/jobs');
     } catch (e: any) {
       setErrorMessage(`Error: ${e.message}`);
@@ -142,7 +190,7 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
               Waiting for launch
             </span>
           )}
-          
+
           <div className="flex gap-3 w-full sm:w-auto">
             <button
               onClick={onClose}
@@ -158,12 +206,12 @@ export function BlueprintRunner({ blueprint, onClose }: BlueprintRunnerProps) {
             >
               {isRunning ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" /> 
+                  <Loader2 className="w-4 h-4 animate-spin" />
                   Launching...
                 </>
               ) : (
                 <>
-                  <Play className="w-4 h-4 fill-current" /> 
+                  <Play className="w-4 h-4 fill-current" />
                   Launch
                 </>
               )}

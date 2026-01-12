@@ -34,8 +34,18 @@ router = APIRouter()
 # Prevent concurrent creation conflicts for the same service
 _service_spawn_locks = defaultdict(asyncio.Lock)
 
-# Flow control semaphores
+# Flow control semaphores (Per-Service)
 _service_semaphores: Dict[str, asyncio.Semaphore] = {}
+
+# === [New] Double Bulkhead Configuration ===
+# 1. Outer Bulkhead: Global Concurrency Limit for Proxy
+#    Protects the Web Server (CPU/RAM/File Descriptors)
+PROXY_GLOBAL_LIMIT = 500
+_proxy_global_semaphore = asyncio.Semaphore(PROXY_GLOBAL_LIMIT)
+
+# 2. Inner Bulkhead: Database Access Limit
+#    Protects the SQLAlchemy Connection Pool (prevents TimeoutError)
+_auth_db_semaphore = asyncio.Semaphore(5)
 
 
 class ServiceSnapshot(BaseModel):
@@ -62,18 +72,24 @@ class ServiceSnapshot(BaseModel):
         from_attributes = True
 
 
+# === [New] Helper for Safe DB Access ===
+async def _safe_db_call(func, *args, **kwargs):
+    """
+    Executes a synchronous DB function within a separate thread,
+    protected by the Inner Bulkhead (_auth_db_semaphore).
+    """
+    async with _auth_db_semaphore:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+
 def _get_service_snapshot_standalone(service_id: str) -> ServiceSnapshot:
     with SessionLocal() as db:
         service = db.query(Service).filter(Service.id == service_id).first()
         if not service:
             raise HTTPException(status_code=404, detail="Service not found")
-        if not service.is_active:
-            raise HTTPException(status_code=503, detail="Service is inactive")
-
-        # Keep-Alive
+        # Keep-Alive: We update activity here as it's a "read" intent
         service.last_activity_time = datetime.utcnow()
         db.commit()
-
         return ServiceSnapshot.model_validate(service)
 
 
@@ -103,8 +119,6 @@ def _shutdown_service_resources_sync(service_id: str, db: Session):
     service.assigned_port = None
     service.current_job_id = None
     service.last_activity_time = datetime.utcnow()
-
-    # Note: We do not delete the semaphore from memory here as requests might be releasing it.
     
     db.flush()
 
@@ -182,14 +196,10 @@ def _check_socket_sync(host: str, port: int, timeout: float = 0.5) -> bool:
     
     
 async def _check_http_readiness(port: int) -> bool:
-
     url = f"http://127.0.0.1:{port}/health"
     short_time = 1.0
     try:
         async with httpx.AsyncClient(timeout=short_time) as client:
-            # 不强制要求服务实现 /health
-            # 但是，服务如果实现了 /health，这里 ok 应该意味着可以转发
-            # 如果没有实现，这里可以 get 到一个 404 的 response
             response = await client.get(url)
             if response.status_code >= 500: return False
         return True
@@ -199,17 +209,11 @@ async def _check_http_readiness(port: int) -> bool:
         return False
 
 
-def _refresh_status_standalone(job_id: str, service_id: str) -> str:
+def _refresh_status_standalone(job_id: str, _: str) -> str:
     with SessionLocal() as db:
         job = db.query(models.Job).filter(models.Job.id == job_id).first()
         if not job:
             return JobStatus.TERMINATED
-
-        service = db.query(models.Service).filter(models.Service.id == service_id).first()
-        if service:
-            service.last_activity_time = datetime.utcnow()
-            db.commit()
-
         return job.status
 
 
@@ -221,15 +225,15 @@ def _update_activity_standalone(service_id: str):
             db.commit()
 
 
-@router.post(
-    "/services",
-    response_model=ServiceResponse
-)
+# === CRUD Routes (Unchanged) ===
+
+@router.post("/services", response_model=ServiceResponse)
 def create_service(
     service_data: ServiceCreate,
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user)
 ) -> models.Service:
+    # ... (Same as original code) ...
     existing = db.query(Service).filter(Service.id == service_data.id).first()
     data = service_data.model_dump()
 
@@ -240,7 +244,6 @@ def create_service(
         was_active = existing.is_active
         will_be_active = data.get("is_active", was_active)
 
-        # Handle concurrency limit changes
         if service_data.max_concurrency != existing.max_concurrency:
             if existing.id in _service_semaphores:
                 del _service_semaphores[existing.id]
@@ -251,7 +254,6 @@ def create_service(
         existing.owner_id = current_user.id
         existing.updated_at = datetime.utcnow()
 
-        # Execute resource cleanup if toggled from Active -> Inactive
         if was_active and not will_be_active:
             _shutdown_service_resources_sync(existing.id, db)
             logger.info(f"Service {existing.id} toggled OFF, resources cleaned up.")
@@ -279,6 +281,7 @@ def delete_service(
     db: Session = Depends(database.get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    # ... (Same as original code) ...
     svc = db.query(Service).filter(Service.id == service_id).first()
     if not svc:
         raise HTTPException(status_code=404, detail="Service not found")
@@ -296,10 +299,7 @@ def delete_service(
     return {"message": "Service deleted successfully"}
 
 
-@router.get(
-    "/services",
-    response_model=PagedServiceResponse
-)
+@router.get("/services", response_model=PagedServiceResponse)
 def list_services(
     skip: int = 0,
     limit: int = 20,
@@ -309,6 +309,7 @@ def list_services(
     sort_by: str = Query("activity", regex="^(activity|updated)$"),
     db: Session = Depends(database.get_db)
 ) -> Dict[str, Any]:
+    # ... (Same as original code) ...
     query = db.query(models.Service)
 
     if search:
@@ -336,6 +337,8 @@ def list_services(
     return {"total": total, "items": items}
 
 
+# === Auth Cache Logic (Unchanged) ===
+
 @dataclass
 class CachedUser:
     id: str
@@ -344,7 +347,7 @@ class CachedUser:
     expires_at: float
 
 _auth_cache: Dict[str, CachedUser] = {}
-AUTH_CACHE_TTL = 60.0  # 用户重置 Token 后 1 分钟内生效
+AUTH_CACHE_TTL = 60.0
 
 def _get_cached_user(token: str) -> Optional[models.User]:
     if token in _auth_cache:
@@ -363,11 +366,14 @@ def _set_cached_user(token: str, user: models.User):
         expires_at = time.time() + AUTH_CACHE_TTL
     )
 
+# === [Modified] Standalone Auth Logic for Proxy ===
+# Renamed from _authenticate_request to avoid confusion with the one in auth.py
+# Removes the dependency on 'Depends(get_db)'
 
-def _authenticate_request(request: Request, db: Session) -> models.User:
+def _authenticate_request_standalone_logic(request: Request) -> models.User:
     """
-    硬编码的全能鉴权逻辑：依次尝试 Header -> Query -> Cookie。
-    只要有一处能提取到合法的 Magnus Token，即视为验证通过。
+    Synchronous auth logic.
+    To be called via _safe_db_call to protect connection pool.
     """
     token = None
 
@@ -389,33 +395,40 @@ def _authenticate_request(request: Request, db: Session) -> models.User:
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated. Please provide token via Header(Bearer), Query(?token=), or Cookie.",
+            detail="Not authenticated.",
         )
         
+    # 1. Fast Path: Cache (No DB)
     cached_user = _get_cached_user(token)
     if cached_user: return cached_user
 
-    user = db.query(models.User).filter(models.User.token == token).first()
+    # 2. Slow Path: DB
+    with SessionLocal() as db:
+        user = db.query(models.User).filter(models.User.token == token).first()
 
-    # JWT 兜底
-    if not user:
-        try:
-            payload = jwt_signer.verify(token)
-            user_id = payload.get("sub")
-            if user_id:
-                user = db.query(models.User).filter(models.User.id == user_id).first()
-        except Exception:
-            pass
+        # JWT Fallback
+        if not user:
+            try:
+                payload = jwt_signer.verify(token)
+                user_id = payload.get("sub")
+                if user_id:
+                    user = db.query(models.User).filter(models.User.id == user_id).first()
+            except Exception:
+                pass
 
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials.",
-        )
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials.",
+            )
+        
+        # Detach user object from session so it can be used after session closes
+        db.expunge(user) 
+        _set_cached_user(token, user)
+        return user
 
-    _set_cached_user(token, user)
-    return user
 
+# === [Modified] Proxy Service Request (The Core Fix) ===
 
 @router.api_route(
     "/services/{service_id}/{path:path}",
@@ -425,135 +438,155 @@ async def proxy_service_request(
     service_id: str,
     path: str,
     request: Request,
-    db: Session = Depends(database.get_db),
+    # REMOVED: db: Session = Depends(database.get_db) -> Fixes Connection Holding
 ) -> StreamingResponse:
-    # 1. Validation
-    _ = await asyncio.to_thread(_authenticate_request, request, db)
-    service_snap = await asyncio.to_thread(_get_service_snapshot_standalone, service_id)
-
-    # 2. Semaphore Management
-    if service_snap.id not in _service_semaphores:
-        _service_semaphores[service_snap.id] = asyncio.Semaphore(service_snap.max_concurrency)
-
-    sem = _service_semaphores[service_snap.id]
-
-    # 3. SLA Budget
+    
+    # === 1. Start SLA Timer ===
     start_time = datetime.utcnow()
-    total_budget = service_snap.request_timeout
+    total_budget: Optional[float] = None 
 
     def get_remaining_time() -> float:
+        # Before snapshot, allow a generous fallback
+        if total_budget is None: return 30.0 
         elapsed = (datetime.utcnow() - start_time).total_seconds()
         return max(0.0, total_budget - elapsed)
 
-    # 4. Traffic Control (Acquire)
+    # === 2. Lightweight Pre-checks (Protected by Inner Bulkhead) ===
+    # Fast operations that don't need the Global Proxy Semaphore
     try:
-        await asyncio.wait_for(sem.acquire(), timeout=get_remaining_time())
+        # A. Auth
+        await _safe_db_call(_authenticate_request_standalone_logic, request)
+        
+        # B. Get Config
+        service_snap = await _safe_db_call(_get_service_snapshot_standalone, service_id)
+        
+        # Set Budget based on Service Configuration
+        total_budget = float(service_snap.request_timeout)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Proxy pre-check failed for {service_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal pre-check failed")
+
+    # === 3. Global Bulkhead (Outer Limit) ===
+    try:
+        # Wait for a global slot using the remaining budget
+        await asyncio.wait_for(
+            _proxy_global_semaphore.acquire(), 
+            timeout=get_remaining_time()
+        )
     except asyncio.TimeoutError:
         raise HTTPException(
-            status_code=429,
-            detail=f"Service is busy (Max concurrency {service_snap.max_concurrency} reached)."
+            status_code=503, 
+            detail=f"System Busy: Global proxy limit ({PROXY_GLOBAL_LIMIT}) reached. Timeout after {total_budget}s."
         )
 
     try:
-        # === Critical Section ===
-
-        # Double-Check: Ensure service is still active after waiting in queue
-        is_active_now = await asyncio.to_thread(_check_active_status_standalone, service_id)
-        if not is_active_now:
-            raise HTTPException(
-                status_code=503,
-                detail="Service was stopped while request was queued."
-            )
-
-        # 5. Spawn Logic
-        if get_remaining_time() <= 0:
-            raise HTTPException(status_code=504, detail="Timeout while waiting for concurrency slot")
-
-        async with _service_spawn_locks[service_id]:
-            current_job_id, assigned_port = await asyncio.to_thread(
-                _try_revive_service_standalone, service_id
-            )
-            service_snap.assigned_port = assigned_port
-
-        # 6. Wait Logic
-        is_ready = False
-
-        while get_remaining_time() > 0:
-            job_status = await asyncio.to_thread(_refresh_status_standalone, current_job_id, service_id)
-
-            if job_status in [JobStatus.FAILED, JobStatus.TERMINATED]:
-                raise HTTPException(status_code=502, detail="Service job failed during startup")
-
-            if job_status in [JobStatus.PENDING, JobStatus.PAUSED]:
-                await asyncio.sleep(1)
-                continue
-
-            if job_status == JobStatus.RUNNING:
-                if not service_snap.assigned_port:
-                    await asyncio.sleep(1)
-                    continue
-
-                socket_ok = await asyncio.to_thread(
-                    _check_socket_sync, "127.0.0.1", service_snap.assigned_port
-                )
-
-                if socket_ok:
-                    if await _check_http_readiness(service_snap.assigned_port):
-                        is_ready = True
-                        break
-                else:
-                    await asyncio.sleep(1)
-                    continue
-
-            await asyncio.sleep(1)
-
-        if not is_ready:
-            raise HTTPException(status_code=504, detail="Service startup timed out")
-
-        # 7. Forward Request
-        service_config = magnus_config.get("server", {}).get("services", {})
-
-        proxy_timeout = httpx.Timeout(
-            connect=service_config.get("proxy_connect_timeout", 2.0),
-            read=service_config.get("proxy_read_timeout", 600.0),
-            write=service_config.get("proxy_write_timeout", 30.0),
-            pool=service_config.get("proxy_pool_timeout", 5.0),
-        )
-
-        client = httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{service_snap.assigned_port}",
-            timeout=proxy_timeout,
-            follow_redirects=True,
-        )
+        # === 4. Service Bulkhead (Per-Service Limit) ===
+        if service_snap.id not in _service_semaphores:
+            _service_semaphores[service_snap.id] = asyncio.Semaphore(service_snap.max_concurrency)
+        
+        service_sem = _service_semaphores[service_snap.id]
 
         try:
-            body = await request.body()
-            rp_req = client.build_request(
-                request.method,
-                f"/{path}",
-                content=body,
-                headers=request.headers.raw,
-                params=request.query_params,
+            await asyncio.wait_for(service_sem.acquire(), timeout=get_remaining_time())
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Service Busy: Max concurrency {service_snap.max_concurrency} reached."
             )
 
-            await asyncio.to_thread(_update_activity_standalone, service_id)
+        try:
+            # === Critical Section ===
 
-            r = await client.send(rp_req, stream=True)
+            # Double-Check Active Status
+            is_active_now = await _safe_db_call(_check_active_status_standalone, service_id)
+            if not is_active_now:
+                raise HTTPException(status_code=503, detail="Service stopped.")
 
-            return StreamingResponse(
-                r.aiter_raw(),
-                status_code=r.status_code,
-                headers=r.headers,
-                background=BackgroundTask(client.aclose),
+            # 5. Spawn / Revive
+            if get_remaining_time() <= 0:
+                raise HTTPException(status_code=504, detail="SLA budget exhausted before spawn.")
+
+            async with _service_spawn_locks[service_id]:
+                current_job_id, assigned_port = await _safe_db_call(_try_revive_service_standalone, service_id)
+                service_snap.assigned_port = assigned_port
+
+            # 6. Wait for Readiness
+            is_ready = False
+            while get_remaining_time() > 0:
+                job_status = await _safe_db_call(_refresh_status_standalone, current_job_id, service_id)
+
+                if job_status in [JobStatus.FAILED, JobStatus.TERMINATED]:
+                    raise HTTPException(status_code=502, detail="Service job failed during startup")
+
+                if job_status == JobStatus.RUNNING:
+                    if not service_snap.assigned_port:
+                        await asyncio.sleep(1)
+                        continue
+
+                    # Socket check (Fast, pure async/sync wrapper)
+                    socket_ok = await asyncio.to_thread(
+                        _check_socket_sync, "127.0.0.1", service_snap.assigned_port
+                    )
+
+                    if socket_ok:
+                        if await _check_http_readiness(service_snap.assigned_port):
+                            is_ready = True
+                            break
+                
+                await asyncio.sleep(1)
+
+            if not is_ready:
+                raise HTTPException(status_code=504, detail="Service startup timed out within SLA budget.")
+
+            # 7. Forward Request
+            service_config = magnus_config.get("server", {}).get("services", {})
+            proxy_timeout = httpx.Timeout(
+                connect=service_config.get("proxy_connect_timeout", 2.0),
+                read=get_remaining_time(), # Dynamic Read Timeout based on remaining budget
+                write=service_config.get("proxy_write_timeout", 30.0),
+                pool=service_config.get("proxy_pool_timeout", 5.0),
             )
 
-        except httpx.ConnectError:
-            await client.aclose()
-            raise HTTPException(status_code=502, detail="Service running but connection failed.")
-        except Exception as e:
-            await client.aclose()
-            logger.error(f"Proxy error for {service_id}: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            client = httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{service_snap.assigned_port}",
+                timeout=proxy_timeout,
+                follow_redirects=True,
+            )
+
+            try:
+                body = await request.body()
+                rp_req = client.build_request(
+                    request.method,
+                    f"/{path}",
+                    content=body,
+                    headers=request.headers.raw,
+                    params=request.query_params,
+                )
+
+                await _safe_db_call(_update_activity_standalone, service_id)
+
+                r = await client.send(rp_req, stream=True)
+
+                return StreamingResponse(
+                    r.aiter_raw(),
+                    status_code=r.status_code,
+                    headers=r.headers,
+                    background=BackgroundTask(client.aclose),
+                )
+
+            except httpx.ConnectError:
+                await client.aclose()
+                raise HTTPException(status_code=502, detail="Service running but connection failed.")
+            except Exception as e:
+                await client.aclose()
+                logger.error(f"Proxy error for {service_id}: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        finally:
+            service_sem.release()
 
     finally:
-        sem.release()
+        _proxy_global_semaphore.release()

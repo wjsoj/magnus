@@ -484,7 +484,7 @@ def main():
         
         setup_commands = [
             "set -e",
-            f"export HOME=/home/{{effective_runner}}",
+            f"export HOME=$(getent passwd {effective_runner} | cut -d: -f6)",
             f"source '{{conda_shell_script_path}}'",
             f"conda activate {{execution_conda_environment}}",
             "unset VIRTUAL_ENV",

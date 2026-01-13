@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "clean": "rimraf .next",
     "dev": "node start-dev.mjs",
+    "clean": "rimraf .next",
     "build": "npm run clean && next build",
+    "deliver": "python3 ../scripts/deploy.py",
     "start": "next start",
     "lint": "next lint"
   },

@@ -3,6 +3,7 @@ import anyio
 import asyncio
 import logging
 import uvicorn
+import argparse
 import concurrent.futures
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -110,9 +111,20 @@ app.include_router(router, prefix="/api")
 
 if __name__ == "__main__":
     
+    parser = argparse.ArgumentParser(description="Magnus Server")
+    parser.add_argument("--deliver", action="store_true", help="Run in delivery mode (production)")
+    args = parser.parse_args()
+    deliver = args.deliver
+
+    reload = not deliver
+    if reload:
+        logger.info("🛠️ Starting Magnus Backend in DEV Mode (Reload Enabled)")
+    else:
+        logger.info("🏭 Starting Magnus Backend in DELIVERY Mode (Reload Disabled)")
+    
     uvicorn.run(
         "server.main:app", 
-        host = "0.0.0.0", 
+        host = "0.0.0.0",
         port = magnus_config["server"]["back_end_port"],
-        reload = True,
+        reload = reload,
     )

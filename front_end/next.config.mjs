@@ -13,10 +13,21 @@ const configPath = path.join(rootDir, 'configs', 'magnus_config.yaml');
 const fileContents = fs.readFileSync(configPath, 'utf8');
 const magnusConfig = yaml.load(fileContents);
 
+const isDeliver = process.env.MAGNUS_DELIVER === 'TRUE';
+if (!isDeliver) {
+  console.log('⚠️ [NextConfig] Running in DEV mode. Hijacking magnusConfig.');
+  magnusConfig.server.front_end_port += 2;
+  magnusConfig.server.back_end_port += 2;
+  magnusConfig.server.root += '-develop';
+} else {
+  console.log('🚀 [NextConfig] Running in DELIVERY mode.');
+}
+
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   env: {
+    NEXT_PUBLIC_FRONT_END_PORT: magnusConfig.server.front_end_port.toString(),
     NEXT_PUBLIC_BACK_END_PORT: magnusConfig.server.back_end_port.toString(),
     NEXT_PUBLIC_FEISHU_APP_ID: magnusConfig.server.feishu_client.app_id,
     NEXT_PUBLIC_POLL_INTERVAL: magnusConfig.client.jobs.poll_interval.toString(),

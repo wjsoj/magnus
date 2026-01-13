@@ -1,4 +1,5 @@
 # back_end/server/_magnus_config.py
+import sys
 from library import *
 
 
@@ -18,7 +19,11 @@ def _load_magnus_config(
 
     try:
         data = load_from_yaml(str(magnus_config_path))
-        return data or {}
+        if "--deliver" not in sys.argv:
+            data["server"]["front_end_port"] += 2
+            data["server"]["back_end_port"] += 2
+            data["server"]["root"] += "-develop"
+        return data
     except Exception as error:
         raise RuntimeError(f"❌ 解析 YAML 失败: {error}\n调用栈：\n{traceback.format_exc()}")
 

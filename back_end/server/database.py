@@ -2,19 +2,24 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from pywheels.file_tools import guarantee_file_exist
 from ._magnus_config import *
 
 
 magnus_database_path = f"{magnus_config['server']['root']}/database"
-guarantee_file_exist(magnus_database_path, is_directory=True)
 sqlalchemy_database_url = f"sqlite:///{magnus_database_path}/magnus.db"
 
 
 engine = create_engine(
-    sqlalchemy_database_url, connect_args={"check_same_thread": False}
+    url = sqlalchemy_database_url, 
+    connect_args = {
+        "check_same_thread": False
+    },
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+SessionLocal = sessionmaker(
+    autocommit = False, 
+    autoflush = False, 
+    bind = engine,
+)
 
 
 Base = declarative_base()

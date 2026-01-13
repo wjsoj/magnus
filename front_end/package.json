@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "node start-dev.mjs",
     "clean": "rimraf .next",
-    "build": "npm run clean && next build",
+    "build": "export MAGNUS_DELIVER=TRUE && npm run clean && next build",
     "deliver": "python3 ../scripts/deploy.py",
     "start": "next start",
     "lint": "next lint"

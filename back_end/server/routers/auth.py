@@ -3,9 +3,11 @@ import secrets
 import logging
 import jwt
 import asyncio
-from typing import List
+import time
+from typing import List, Optional, Dict
+from dataclasses import dataclass
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
@@ -19,8 +21,44 @@ from .._feishu_client import feishu_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/feishu/login")
 
+# [Compatibility] auto_error=False allows us to handle missing headers manually 
+# (e.g., checking query params or cookies)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/feishu/login", auto_error=False)
+
+
+# === 1. Auth Cache Logic (Ported from services.py) ===
+
+@dataclass
+class CachedUser:
+    id: str
+    name: str
+    token: str
+    expires_at: float
+
+_auth_cache: Dict[str, CachedUser] = {}
+AUTH_CACHE_TTL = 60.0  # 1 minute cache
+
+def _get_from_cache(token: str) -> Optional[str]:
+    """Returns user_id if cached and valid"""
+    if token in _auth_cache:
+        cached = _auth_cache[token]
+        if time.time() < cached.expires_at:
+            return cached.id
+        else:
+            del _auth_cache[token]
+    return None
+
+def _add_to_cache(token: str, user: models.User):
+    _auth_cache[token] = CachedUser(
+        id=user.id,
+        name=user.name,
+        token=token,
+        expires_at=time.time() + AUTH_CACHE_TTL
+    )
+
+
+# === 2. Core Logic ===
 
 def generate_trust_token() -> str:
     return f"sk-{secrets.token_urlsafe(24)}"
@@ -57,37 +95,100 @@ def _upsert_feishu_user_sync(db: Session, feishu_user: dict) -> models.User:
 
 
 def get_current_user(
-    token: str = Depends(oauth2_scheme),
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
     db: Session = Depends(database.get_db),
 ) -> models.User:
     """
-    [Critical Fix] 改为同步 def。
-    FastAPI 会自动将此依赖项放入线程池运行，防止 db.query 阻塞主事件循环。
+    [Unified Auth Dependency]
+    支持混合鉴权：
+    1. Cache Check
+    2. SDK Token Check (User.token)
+    3. JWT Check (Web Token)
+    4. Supports Header/Query/Cookie
     """
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    
+    # --- Step A: Extract Token String ---
+    # 1. Try Authorization Header (via OAuth2 scheme)
+    final_token = token
 
-    try:
-        payload = jwt.decode(
-            token,
-            magnus_config["server"]["jwt_signer"]["secret_key"],
-            algorithms=[magnus_config["server"]["jwt_signer"]["algorithm"]],
+    # 2. Try Query Parameter (common for simple scripts/webhooks)
+    if not final_token:
+        final_token = request.query_params.get("token")
+
+    # 3. Try Cookie (Fallback)
+    if not final_token:
+        final_token = request.cookies.get("access_token") or request.cookies.get("token")
+
+    if not final_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except jwt.PyJWTError:
-        raise credentials_exception
 
-    user = db.query(models.User).filter(models.User.id == user_id).first()
+    # --- Step B: Verify Token (Mixed Mode) ---
+    
+    user_id_found = None
+    
+    # 1. Check Cache
+    cached_id = _get_from_cache(final_token)
+    if cached_id:
+        user_id_found = cached_id
+    
+    # 2. Check DB Token (SDK Trust Token)
+    if not user_id_found:
+        # User.token is indexed usually, or should be. 
+        # Checking this string is fast.
+        user_by_token = db.query(models.User).filter(models.User.token == final_token).first()
+        if user_by_token:
+            user_id_found = user_by_token.id
+            _add_to_cache(final_token, user_by_token)
+
+    # 3. Check JWT (Web Session)
+    if not user_id_found:
+        try:
+            payload = jwt.decode(
+                final_token,
+                magnus_config["server"]["jwt_signer"]["secret_key"],
+                algorithms=[magnus_config["server"]["jwt_signer"]["algorithm"]],
+            )
+            user_id = payload.get("sub")
+            if user_id:
+                user_id_found = user_id
+                # NOTE: We can optionally cache JWTs too, but JWT verification is fast enough.
+                # Adding to cache here avoids repeated decoding.
+                # We need a dummy user obj or just wait for the DB fetch below to cache it.
+        except jwt.PyJWTError:
+            pass
+
+    # --- Step C: Finalize & Attach to Session ---
+    
+    if not user_id_found:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # [Crucial] Fetch User by ID to ensure it is attached to the current DB Session.
+    # This prevents 'DetachedInstanceError' when Routers try to access lazy-loaded relationships (e.g. user.jobs).
+    user = db.query(models.User).filter(models.User.id == user_id_found).first()
+    
     if user is None:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+
+    # Update cache if it was a JWT hit (now we have the full user object)
+    if not cached_id:
+        _add_to_cache(final_token, user)
 
     return user
 
+
+# === 3. Routes ===
 
 @router.post(
     "/auth/feishu/login",

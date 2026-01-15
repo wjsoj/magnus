@@ -1,5 +1,4 @@
 # back_end/server/routers/services.py
-import time
 import httpx
 import logging
 import asyncio
@@ -8,10 +7,8 @@ from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 from collections import defaultdict
 from pydantic import BaseModel
-from dataclasses import dataclass
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query, status
-from fastapi.security.utils import get_authorization_scheme_param
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
@@ -25,7 +22,6 @@ from ..schemas import ServiceResponse, ServiceCreate, PagedServiceResponse
 from .._service_manager import service_manager
 from .._magnus_config import magnus_config
 from .._scheduler import scheduler
-from .._jwt_signer import jwt_signer
 from .auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -337,98 +333,28 @@ def list_services(
     return {"total": total, "items": items}
 
 
-# === Auth Cache Logic (Unchanged) ===
-
-@dataclass
-class CachedUser:
-    id: str
-    name: str
-    token: str
-    expires_at: float
-
-_auth_cache: Dict[str, CachedUser] = {}
-AUTH_CACHE_TTL = 60.0
-
-def _get_cached_user(token: str) -> Optional[models.User]:
-    if token in _auth_cache:
-        cached = _auth_cache[token]
-        if time.time() < cached.expires_at:
-            return models.User(id=cached.id, name=cached.name)
-        else:
-            del _auth_cache[token]
-    return None
-
-def _set_cached_user(token: str, user: models.User):
-    _auth_cache[token] = CachedUser(
-        id = user.id,
-        name = user.name,
-        token = token,
-        expires_at = time.time() + AUTH_CACHE_TTL
-    )
-
 # === [Modified] Standalone Auth Logic for Proxy ===
-# Renamed from _authenticate_request to avoid confusion with the one in auth.py
-# Removes the dependency on 'Depends(get_db)'
 
-def _authenticate_request_standalone_logic(request: Request) -> models.User:
+def _authenticate_adapter(request: Request):
     """
-    Synchronous auth logic.
-    To be called via _safe_db_call to protect connection pool.
+    Adapts the unified auth logic from auth.py to the standalone/thread-safe 
+    context required by the proxy.
+    
+    Why this is needed:
+    The proxy path explicitly avoids holding a main-thread DB session (to support high concurrency).
+    Standard FastAPI Dependencies (Depends) work by injecting deps at the start of the request.
+    Here, we need to:
+    1. Create a short-lived DB session (SessionLocal) inside the thread.
+    2. Manually call the auth logic.
     """
-    token = None
-
-    # Try Authorization Header
-    authorization = request.headers.get("Authorization")
-    if authorization:
-        scheme, param = get_authorization_scheme_param(authorization)
-        if scheme.lower() == "bearer":
-            token = param
-
-    # Try Query Parameter
-    if not token:
-        token = request.query_params.get("token")
-
-    # Try Cookies
-    if not token:
-        token = request.cookies.get("access_token") or request.cookies.get("token")
-
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated.",
-        )
-        
-    # 1. Fast Path: Cache (No DB)
-    cached_user = _get_cached_user(token)
-    if cached_user: return cached_user
-
-    # 2. Slow Path: DB
     with SessionLocal() as db:
-        user = db.query(models.User).filter(models.User.token == token).first()
-
-        # JWT Fallback
-        if not user:
-            try:
-                payload = jwt_signer.verify(token)
-                user_id = payload.get("sub")
-                if user_id:
-                    user = db.query(models.User).filter(models.User.id == user_id).first()
-            except Exception:
-                pass
-
-        if not user:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid authentication credentials.",
-            )
-        
-        # Detach user object from session so it can be used after session closes
-        db.expunge(user) 
-        _set_cached_user(token, user)
-        return user
+        # We manually call get_current_user. 
+        # Passing token=None tells it to look into the request (Headers/Query/Cookie).
+        # Exceptions (401) will propagate up and be caught by the proxy pre-check.
+        get_current_user(request, token=None, db=db)
 
 
-# === [Modified] Proxy Service Request (The Core Fix) ===
+# === Proxy Service Request ===
 
 @router.api_route(
     "/services/{service_id}/{path:path}",
@@ -454,8 +380,8 @@ async def proxy_service_request(
     # === 2. Lightweight Pre-checks (Protected by Inner Bulkhead) ===
     # Fast operations that don't need the Global Proxy Semaphore
     try:
-        # A. Auth
-        await _safe_db_call(_authenticate_request_standalone_logic, request)
+        # A. Auth (Using the new adapter which calls shared logic)
+        await _safe_db_call(_authenticate_adapter, request)
         
         # B. Get Config
         service_snap = await _safe_db_call(_get_service_snapshot_standalone, service_id)

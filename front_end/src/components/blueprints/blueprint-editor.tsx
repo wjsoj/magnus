@@ -131,7 +131,6 @@ export function BlueprintEditor({ isOpen, mode, initialData, onClose, onSave, is
     <Drawer
       isOpen={isOpen}
       onClose={onClose}
-      // Drawer 标题保持原始意图 (Create/Clone)，但操作按钮会根据 ID 变化而变化
       title={mode === 'create' ? "Create Blueprint" : "Clone / Update Blueprint"}
       icon={mode === 'create' ? <DraftingCompass className="w-5 h-5 text-blue-500" /> : <RefreshCw className="w-5 h-5 text-purple-500" />}
       width="w-full max-w-4xl"

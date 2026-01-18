@@ -125,8 +125,9 @@ const JobForm = forwardRef(function JobForm({ mode, initialData, onCancel, onSuc
       if (payload.commit_sha !== undefined) setSelectedCommit(payload.commit_sha);
       if (payload.entry_command !== undefined) setCommand(payload.entry_command);
       
-      // Bypass scan requirement if repo info is present
-      if (payload.repo_name || payload.repoName) {
+      // Bypass scan requirement if software info is already present
+      if (payload.namespace && (payload.repo_name || payload.repoName) 
+        && payload.branch && payload.commit_sha) {
         setHasScanned(true);
       }
 

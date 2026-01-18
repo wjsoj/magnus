@@ -161,6 +161,12 @@ const ServiceForm = forwardRef(function ServiceForm({ initialData, onCancel, onS
       if (payload.commit_sha !== undefined) setSelectedCommit(payload.commit_sha);
       if (payload.entry_command !== undefined) setCommand(payload.entry_command);
 
+      // Bypass scan requirement if software info is already present
+      if (payload.namespace && (payload.repo_name || payload.repoName) 
+        && payload.branch && payload.commit_sha) {
+        setHasScanned(true);
+      }
+
       // Resources
       if (payload.gpu_count !== undefined) setGpuCount(payload.gpu_count);
       if (payload.gpu_type !== undefined) setGpuType(payload.gpu_type);

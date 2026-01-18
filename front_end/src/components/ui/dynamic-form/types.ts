@@ -23,6 +23,7 @@ export interface FieldSchema {
   // Str specific
   placeholder?: string;
   multi_line?: boolean;
+  min_lines?: number;
   color?: string;
   border_color?: string;
   allow_empty?: boolean;

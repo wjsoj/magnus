@@ -153,6 +153,7 @@ class BlueprintParamSchema(BaseModel):
     max: Optional[int] = None
     placeholder: Optional[str] = None
     multi_line: bool = False
+    min_lines: Optional[int] = None
     color: Optional[str] = None
     border_color: Optional[str] = None
     options: Optional[List[BlueprintParamOption]] = None

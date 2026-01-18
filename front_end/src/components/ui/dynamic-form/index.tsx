@@ -38,7 +38,8 @@ function DynamicStringInput({
 
   const baseClasses = cn(
     "w-full bg-zinc-950 border px-3 py-2.5 rounded-lg text-sm transition-all outline-none placeholder-zinc-700",
-    field.multi_line && "font-mono leading-relaxed resize-none overflow-hidden min-h-[42px]",
+    field.multi_line && "font-mono leading-relaxed resize-none overflow-hidden", 
+    (field.multi_line && !field.min_lines) && "min-h-[42px]", 
     hasError 
       ? "border-red-500 animate-shake" 
       : (!field.border_color 
@@ -66,7 +67,7 @@ function DynamicStringInput({
   };
 
   if (field.multi_line) {
-    return <textarea ref={textareaRef} rows={1} {...commonProps} />;
+    return <textarea ref={textareaRef} rows={field.min_lines || 1} {...commonProps} />;
   }
 
   return <input type="text" {...commonProps} />;

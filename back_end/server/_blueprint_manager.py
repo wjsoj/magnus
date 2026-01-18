@@ -104,6 +104,7 @@ class BlueprintManager:
                 if "color" in meta_dict: schema.color = meta_dict["color"]
                 if "border_color" in meta_dict: schema.border_color = meta_dict["border_color"]
                 if "multi_line" in meta_dict: schema.multi_line = bool(meta_dict["multi_line"])
+                if "min_lines" in meta_dict: schema.min_lines = int(meta_dict["min_lines"])
 
             elif origin_base is Literal:
                 schema.type = "select"

@@ -170,7 +170,7 @@ class SlurmManager:
                 command.append(f"--gres=gpu:{gpus}")
         
         if memory_demand is not None: command.append(f"--mem={memory_demand}") 
-        if cpu_count is not None: command.append(f"--cpus-per-task={cpu_count}")
+        if cpu_count is not None and cpu_count > 0: command.append(f"--cpus-per-task={cpu_count}")
 
         job_id = None
         

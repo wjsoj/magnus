@@ -22,6 +22,62 @@ from .auth import get_current_user
 from library import *
 
 
+def _normalize_obj(
+    obj: Any
+)-> Any:
+    
+    if isinstance(obj, dict):
+        return {k: _normalize_obj(v) for k, v in obj.items()}
+    elif isinstance(obj, list) or isinstance(obj, tuple):
+        return [_normalize_obj(x) for x in obj]
+    elif isinstance(obj, set):
+        try:
+            return sorted([_normalize_obj(x) for x in obj], key=lambda x: str(x))
+        except:
+            return sorted([str(x) for x in obj])
+    elif isinstance(obj, float):
+        if obj.is_integer():
+            return int(obj)
+        return obj
+    return obj
+
+
+def _compute_signature_hash(
+    code: str,
+)-> str:
+    
+    try:
+        schema_objs = blueprint_manager.analyze_signature(code)
+        schema_dicts = []
+        for s in schema_objs:
+            if hasattr(s, "model_dump"):
+                schema_dicts.append(s.model_dump())
+            elif hasattr(s, "dict"):
+                schema_dicts.append(s.dict()) # 兼容旧版 Pydantic
+            elif isinstance(s, dict):
+                schema_dicts.append(s)
+            else:
+                schema_dicts.append(str(s)) # 兜底
+                
+        normalized_schema = _normalize_obj(schema_dicts)
+        
+        canonical_json = json.dumps(
+            normalized_schema, 
+            sort_keys = True, 
+            separators = (',', ':'),
+            ensure_ascii = False,
+        )
+        
+        final_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+        
+        return final_hash
+        
+    except Exception as e:
+        logger.error(f"❌ Hash computation failed: {e}")
+        logger.error(traceback.format_exc())
+        return "invalid_signature"
+
+
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -235,35 +291,6 @@ def get_blueprint_preference(
         cached_params=deserialize_json(pref.cached_params),
         updated_at=pref.updated_at,
     )
-    
-    
-def _compute_signature_hash(code: str) -> str:
-    try:
-        schema_objs = blueprint_manager.analyze_signature(code)
-        schema_dicts = []
-        for s in schema_objs:
-            if hasattr(s, "model_dump"):
-                schema_dicts.append(s.model_dump())
-            elif hasattr(s, "dict"):
-                schema_dicts.append(s.dict()) # 兼容旧版 Pydantic
-            elif isinstance(s, dict):
-                schema_dicts.append(s)
-            else:
-                schema_dicts.append(str(s)) # 兜底
-
-        # 紧凑格式 Canonical JSON，匹配前端
-        canonical_json = json.dumps(
-            schema_dicts, 
-            sort_keys=True, 
-            separators=(',', ':') 
-        )
-        
-        return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-        
-    except Exception as e:
-        logger.error(f"❌ Hash computation failed: {e}")
-        logger.error(traceback.format_exc())
-        return "invalid_signature"
 
 
 @router.put(

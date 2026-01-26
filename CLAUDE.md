@@ -214,3 +214,4 @@ server:
 1. **增量修改**：使用 Edit 工具增量修改文件，不要用 Write 全量重写
 2. **不要 git push**：用户会自己 review 并 push
 3. **library 纯净**：library 里不能有 Magnus 相关逻辑
+4. **不用管 sdk 版本号**：sdk 版本号由用户自己掌管，不要代为自增

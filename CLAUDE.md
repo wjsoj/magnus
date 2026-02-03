@@ -119,7 +119,7 @@ async def lifespan(app: FastAPI):
 - **必须**用 `magnus_config[key]` 直接访问，禁止 `.get()` 带默认值
 - Quick fail 好于模模糊糊地运行不休
 - 必要的配置项在 `_magnus_config.py` 加载时验证存在性和类型
-- **修改配置结构时**，必须同步更新 `configs/magnus_config.yaml` 和 `configs/magnus_config.yaml.example`
+- **修改配置结构时**，必须同步更新 `configs/magnus_config.yaml` 和 `configs/magnus_config.yaml.example`，同时更新 `_magnus_config.py`
 
 ---
 
